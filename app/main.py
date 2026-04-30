@@ -249,7 +249,7 @@ def generate_qrcode(request: Request, user=Depends(require_role('patient'))):
             token = secrets.token_urlsafe(24)
             execute(conn,'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (user['id'], token, utcnow()))
             row = execute(conn, 'SELECT * FROM qrcodes WHERE patient_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', (user['id'],)).fetchone()
-    public_url = str(request.base_url).rstrip('/') + f'/secours/{row["token"]}'
+    public_url = str(request.base_url).rstrip('/') + f'/emergency.html?token={row["token"]}'
     img = qrcode.make(public_url)
     buffer = BytesIO()
     img.save(buffer, format='PNG')
