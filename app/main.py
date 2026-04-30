@@ -3,12 +3,13 @@ import json
 import secrets
 from io import BytesIO
 from pathlib import Path
+from html import escape
 from typing import Any, Dict, Optional
 
 import qrcode
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import APP_NAME
@@ -39,6 +40,30 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / 'public'
 if not STATIC_DIR.exists():
     STATIC_DIR = BASE_DIR / 'static'
+
+
+def get_site_origin(request: Request) -> str:
+    origin = request.headers.get('origin')
+    if origin:
+        return origin.rstrip('/')
+    proto = request.headers.get('x-forwarded-proto') or request.url.scheme
+    host = request.headers.get('x-forwarded-host') or request.headers.get('host') or request.url.netloc
+    return f"{proto}://{host}".rstrip('/')
+
+
+def get_public_patient_payload(token: str, request: Request):
+    with get_conn() as conn:
+        qr = execute(conn, 'SELECT * FROM qrcodes WHERE token = ? AND is_active = 1', (token,)).fetchone()
+        if not qr:
+            raise HTTPException(status_code=404, detail='QR Code invalide ou révoqué.')
+        user = execute(conn, "SELECT * FROM users WHERE id = ? AND role = 'patient'", (qr['patient_id'],)).fetchone()
+        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (qr['patient_id'],)).fetchone()
+        if not user or not dossier or dossier.get('is_archived'):
+            raise HTTPException(status_code=404, detail='Patient introuvable.')
+    log_access(user['id'], None, 'secours', 'public', request.client.host if request.client else None)
+    data = serialize_dossier(user, dossier, include_private=False)
+    data['medpass_id'] = f"PMU-{user['id']:05d}"
+    return data
 
 
 def json_loads_safe(value: str, fallback: Any):
@@ -249,7 +274,7 @@ def generate_qrcode(request: Request, user=Depends(require_role('patient'))):
             token = secrets.token_urlsafe(24)
             execute(conn,'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (user['id'], token, utcnow()))
             row = execute(conn, 'SELECT * FROM qrcodes WHERE patient_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', (user['id'],)).fetchone()
-    public_url = str(request.base_url).rstrip('/') + f'/emergency.html?token={row["token"]}'
+    public_url = get_site_origin(request) + f'/secours/{row["token"]}'
     img = qrcode.make(public_url)
     buffer = BytesIO()
     img.save(buffer, format='PNG')
@@ -273,25 +298,101 @@ def verify_qr(token: str):
         return {'valid': bool(row), 'patient_id': row['patient_id'] if row else None}
 
 
-@app.get('/secours/{token}')
-def secours_redirect(token: str):
-    return RedirectResponse(url=f'/emergency.html?token={token}', status_code=307)
+@app.get('/secours/{token}', response_class=HTMLResponse)
+def secours_page(token: str, request: Request):
+    data = get_public_patient_payload(token, request)
+
+    def chips(items):
+        values = items or []
+        if not values:
+            return '<span class="array-item">Aucune</span>'
+        return ''.join(f'<span class="array-item">{escape(str(item))}</span>' for item in values)
+
+    name = escape(f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or 'Patient')
+    blood = escape(data.get('blood_type') or '—')
+    medpass_id = escape(data.get('medpass_id') or '—')
+    contact_name = escape(data.get('emergency_contact_name') or 'Non renseigné')
+    contact_phone_raw = data.get('emergency_contact_phone') or ''
+    contact_phone = escape(contact_phone_raw or 'Non renseigné')
+    instructions = escape(data.get('emergency_instructions') or 'Aucune consigne spécifique.')
+    phone_link = f'<a class="btn btn-primary btn-full" href="tel:{escape(contact_phone_raw)}">Appeler le contact d&apos;urgence</a>' if contact_phone_raw else ""
+
+    html = f"""<!DOCTYPE html>
+<html lang=\"fr\">
+<head>
+  <meta charset=\"UTF-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
+  <title>MedPass — Vue secours</title>
+  <link rel=\"stylesheet\" href=\"/styles.css\" />
+</head>
+<body>
+  <div class=\"app-bg\"></div>
+  <main class=\"shell shell-site shell-full\">
+    <section class=\"phone-frame wide-frame site-frame site-frame-full\">
+      <header class=\"topbar topbar-site landing-topbar\">
+        <div>
+          <p class=\"eyebrow\">Passeport médical d'urgence</p>
+          <h1>MedPass</h1>
+          <p class=\"muted site-subtitle\">Vue secours directe du patient.</p>
+        </div>
+        <div class=\"topbar-pill blue\">Accès d'urgence</div>
+      </header>
+
+      <section class=\"hero-card hero-site hero-site-full\">
+        <div class=\"hero-copy\">
+          <span class=\"badge red\">Informations vitales</span>
+          <h2>{name}</h2>
+          <p class=\"muted site-description\">Accédez immédiatement aux données essentielles du patient en cas d'urgence.</p>
+          <div class=\"feature-points feature-points-simple\">
+            <div class=\"mini-feature\">
+              <strong>Groupe sanguin</strong>
+              <span>{blood}</span>
+            </div>
+            <div class=\"mini-feature\">
+              <strong>Identifiant MedPass</strong>
+              <span>{medpass_id}</span>
+            </div>
+            <div class=\"mini-feature\">
+              <strong>Contact d'urgence</strong>
+              <span>{contact_name}<br>{contact_phone}</span>
+            </div>
+          </div>
+          <div class=\"hero-actions\" style=\"margin-top:18px;\">
+            {phone_link}
+          </div>
+        </div>
+
+        <div class=\"hero-visual app-card hero-visual-large\">
+          <div class=\"visual-badge-row\">
+            <span class=\"status-pill danger\">Urgence</span>
+            <span class=\"status-pill\">Secours</span>
+          </div>
+          <div class=\"visual-panel\" style=\"justify-items:stretch; text-align:left;\">
+            <div class=\"app-card\" style=\"padding:16px;\">
+              <h3>Allergies</h3>
+              <div class=\"array-list\">{chips(data.get('public_allergies'))}</div>
+            </div>
+            <div class=\"app-card\" style=\"padding:16px;\">
+              <h3>Pathologies d'urgence</h3>
+              <div class=\"array-list\">{chips(data.get('public_conditions'))}</div>
+            </div>
+            <div class=\"app-card\" style=\"padding:16px;\">
+              <h3>Consignes</h3>
+              <p class=\"muted\" style=\"margin-bottom:0;\">{instructions}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 @app.get('/api/dossier/public/{token}')
 def public_dossier(token: str, request: Request):
-    with get_conn() as conn:
-        qr = execute(conn, 'SELECT * FROM qrcodes WHERE token = ? AND is_active = 1', (token,)).fetchone()
-        if not qr:
-            raise HTTPException(status_code=404, detail='QR Code invalide ou révoqué.')
-        user = execute(conn, "SELECT * FROM users WHERE id = ? AND role = 'patient'", (qr['patient_id'],)).fetchone()
-        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (qr['patient_id'],)).fetchone()
-        if not user or not dossier or dossier.get('is_archived'):
-            raise HTTPException(status_code=404, detail='Patient introuvable.')
-    log_access(user['id'], None, 'secours', 'public', request.client.host if request.client else None)
-    data = serialize_dossier(user, dossier, include_private=False)
-    data['medpass_id'] = f'PMU-{user["id"]:05d}'
-    return data
+    return get_public_patient_payload(token, request)
 
 
 @app.get('/api/patients')
