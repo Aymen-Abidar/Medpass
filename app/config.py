@@ -2,8 +2,6 @@ from pathlib import Path
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / 'data'
-DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DATABASE_URL = (
     os.getenv('DATABASE_URL')
@@ -12,7 +10,16 @@ DATABASE_URL = (
     or ''
 ).strip()
 DB_BACKEND = 'postgres' if DATABASE_URL.startswith(('postgres://', 'postgresql://')) else 'sqlite'
-DB_PATH = os.getenv('MEDPASS_DB_PATH', str(DATA_DIR / 'medpass.db'))
+
+if DB_BACKEND == 'sqlite':
+    default_data_dir = '/tmp/medpass_data' if os.getenv('VERCEL') else str(BASE_DIR / 'data')
+    DATA_DIR = Path(os.getenv('MEDPASS_DATA_DIR', default_data_dir))
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DB_PATH = os.getenv('MEDPASS_DB_PATH', str(DATA_DIR / 'medpass.db'))
+else:
+    DATA_DIR = None
+    DB_PATH = os.getenv('MEDPASS_DB_PATH', '')
+
 JWT_SECRET = os.getenv('MEDPASS_JWT_SECRET', 'change-this-jwt-secret-in-production')
 ENCRYPTION_KEY = os.getenv('MEDPASS_ENCRYPTION_KEY', '0123456789abcdef0123456789abcdef')
 APP_NAME = 'MedPass'
