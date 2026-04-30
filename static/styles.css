@@ -312,3 +312,87 @@ h4 { font-size: 1rem; margin-bottom: 8px; }
   h1 { font-size: 1.8rem; }
   h2 { font-size: 1.4rem; }
 }
+
+
+/* Landing page full-width refresh */
+body[data-page="landing"] .shell-full {
+  padding: 0;
+}
+body[data-page="landing"] .site-frame-full {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  padding: 28px clamp(18px, 3vw, 42px) 26px;
+  background:
+    radial-gradient(circle at top left, rgba(78, 168, 255, 0.14), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(39, 195, 138, 0.10), transparent 24%),
+    linear-gradient(180deg, rgba(12, 22, 42, 0.96), rgba(9, 18, 33, 0.98));
+}
+body[data-page="landing"] .landing-topbar,
+body[data-page="landing"] .hero-site-full,
+body[data-page="landing"] .stats-grid-landing,
+body[data-page="landing"] .section-block-large,
+body[data-page="landing"] .site-footer {
+  width: 100%;
+}
+body[data-page="landing"] .hero-site-full {
+  grid-template-columns: minmax(0, 1.3fr) minmax(340px, 0.9fr);
+  gap: 28px;
+  padding: 28px;
+}
+body[data-page="landing"] .hero-visual-large {
+  min-height: 100%;
+}
+body[data-page="landing"] .feature-points-simple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+body[data-page="landing"] .stats-grid-landing {
+  gap: 16px;
+}
+body[data-page="landing"] .section-block-large {
+  padding: 24px;
+}
+body[data-page="landing"] .site-footer {
+  padding-bottom: 8px;
+}
+
+@media (max-width: 1040px) {
+  body[data-page="landing"] .hero-site-full,
+  body[data-page="landing"] .feature-points-simple,
+  body[data-page="landing"] .stats-grid-landing,
+  body[data-page="landing"] .role-list,
+  body[data-page="landing"] .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 880px) {
+  body[data-page="landing"] .site-frame-full {
+    min-height: 100vh;
+    border-radius: 0;
+    padding: 18px 14px 20px;
+  }
+  body[data-page="landing"] .hero-site-full,
+  body[data-page="landing"] .section-block-large {
+    padding: 18px;
+  }
+}
+
+@media (max-width: 560px) {
+  body[data-page="landing"] .site-frame-full {
+    padding: 14px 12px 18px;
+  }
+  body[data-page="landing"] .hero-site-full,
+  body[data-page="landing"] .section-block-large,
+  body[data-page="landing"] .stats-grid-landing .stat-card {
+    padding: 16px;
+  }
+  body[data-page="landing"] .topbar-pill {
+    width: 100%;
+    text-align: center;
+  }
+}
