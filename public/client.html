@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedPass — Patient</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="client">
+  <div class="app-bg"></div>
+  <main class="shell">
+<section class="phone-frame wide-frame"><header class="topbar"><div><p class="eyebrow">Espace patient</p><h1 id="patient-name">Patient</h1></div><div class="toolbar"><a href="/patient-profile.html" class="btn btn-secondary">Mon profil</a><button id="logout-btn" class="btn btn-secondary">Déconnexion</button></div></header><nav class="app-nav"><a class="nav-link active" href="/client.html">Dashboard</a><a class="nav-link" href="/patient-profile.html">Profil médical</a><a class="nav-link" href="/patient-qr.html">Mon QR</a><a class="nav-link" href="/scanner.html">Scanner</a></nav><section class="kpi-grid section-block"><div class="kpi-card"><p class="muted">Groupe sanguin</p><div id="blood-type">—</div></div><div class="kpi-card"><p class="muted">Allergies publiques</p><div id="allergies-list"></div></div><div class="kpi-card"><p class="muted">Pathologies urgence</p><div id="conditions-list"></div></div><div class="kpi-card"><p class="muted">Dernière mise à jour</p><div id="patient-updated">—</div></div></section><section class="split-grid"><div class="section-block"><div class="section-title-row"><div><p class="section-kicker">Résumé</p><h3>Contact urgence</h3></div><a href="/patient-qr.html" class="btn btn-primary">Voir mon QR</a></div><div class="app-card"><p id="emergency-contact">Non renseigné</p><p class="muted" id="patient-summary">—</p></div><div id="client-message"></div></div><div class="section-block"><div class="section-title-row"><div><p class="section-kicker">Journal</p><h3>Historique des accès</h3></div></div><div id="access-logs" class="log-list"></div></div></section></section>
+</main>
+  <script src="/app.js"></script>
+</body>
+</html>

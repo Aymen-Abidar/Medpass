@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedPass — Connexion</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="login">
+  <div class="app-bg"></div>
+  <main class="shell">
+<section class="phone-frame wide-frame"><header class="topbar"><div><p class="eyebrow">Accès sécurisé</p><h1>Connexion / inscription</h1></div><a href="/" class="btn btn-secondary">Accueil</a></header><div class="split-grid"><section class="auth-card"><span class="badge blue">Se connecter</span><h3 style="margin-top:12px;">Compte existant</h3><form id="login-form" class="stack"><div class="label-block"><label>E-mail</label><input type="email" name="email" placeholder="patient@medpassdemo.com" required /></div><div class="label-block"><label>Mot de passe</label><input type="password" name="password" required /></div><button class="btn btn-primary btn-full" type="submit">Se connecter</button></form></section><section class="auth-card"><span class="badge green">Créer un compte</span><h3 style="margin-top:12px;">Patient ou médecin</h3><form id="register-form" class="stack"><div class="grid-2"><div class="label-block"><label>Prénom</label><input name="first_name" required /></div><div class="label-block"><label>Nom</label><input name="last_name" required /></div></div><div class="grid-2"><div class="label-block"><label>E-mail</label><input type="email" name="email" required /></div><div class="label-block"><label>Date de naissance</label><input type="date" name="birth_date" /></div></div><div class="grid-2"><div class="label-block"><label>Mot de passe</label><input type="password" name="password" minlength="8" required /></div><div class="label-block"><label>Rôle</label><select name="role" id="register-role"><option value="patient">Patient</option><option value="doctor">Médecin</option></select></div></div><div class="label-block hidden" id="doctor-pin-wrap"><label>PIN médecin (4 chiffres)</label><input name="doctor_pin" maxlength="4" placeholder="1234" /></div><button class="btn btn-success btn-full" type="submit">Créer le compte</button></form></section></div><div id="auth-result"></div></section>
+</main>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedPass — Profil médical</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="patientProfile">
+  <div class="app-bg"></div>
+  <main class="shell">
+<section class="phone-frame wide-frame"><header class="topbar"><div><p class="eyebrow">Patient</p><h1 id="pp-name">Mon profil médical</h1></div><div class="toolbar"><a href="/client.html" class="btn btn-secondary">Dashboard</a><button id="logout-btn" class="btn btn-secondary">Déconnexion</button></div></header><form id="patient-profile-form" class="section-block stack"><div class="section-title-row"><div><p class="section-kicker">Données publiques</p><h3>Visible par les secours</h3></div></div><div class="grid-2"><div class="label-block"><label>Groupe sanguin</label><input name="blood_type" /></div><div class="label-block"><label>Contact urgence</label><input name="emergency_contact_name" /></div></div><div class="grid-2"><div class="label-block"><label>Numéro urgence</label><input name="emergency_contact_phone" /></div><div class="label-block"><label>Allergies</label><textarea name="public_allergies"></textarea></div></div><div class="grid-2"><div class="label-block"><label>Pathologies urgence</label><textarea name="public_conditions"></textarea></div><div class="label-block"><label>Instructions secours</label><textarea name="emergency_instructions"></textarea></div></div><div class="section-title-row"><div><p class="section-kicker">Données privées</p><h3>Visible seulement par le médecin</h3></div></div><div class="grid-2"><div class="label-block"><label>Médecin traitant</label><input name="doctor_name" /></div><div class="label-block"><label>RPPS</label><input name="doctor_rpps" /></div></div><div class="grid-2"><div class="label-block"><label>Traitements</label><textarea name="treatments"></textarea></div><div class="label-block"><label>Antécédents</label><textarea name="antecedents"></textarea></div></div><div class="grid-2"><div class="label-block"><label>Vaccinations</label><textarea name="vaccinations"></textarea></div><div class="label-block"><label>Ordonnances</label><textarea name="ordonnances"></textarea></div></div><div class="grid-3"><div class="label-block"><label>IMC</label><input name="imc" /></div><div class="label-block"><label>Tension</label><input name="blood_pressure" /></div><div class="label-block"><label>Notes</label><textarea name="notes"></textarea></div></div><div class="form-actions"><button type="submit" class="btn btn-primary">Enregistrer</button><a href="/patient-qr.html" class="btn btn-secondary">Mon QR</a></div><div id="profile-message"></div></form></section>
+</main>
+  <script src="/app.js"></script>
+</body>
+</html>

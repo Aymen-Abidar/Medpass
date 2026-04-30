@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedPass — Dossier patient</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="doctorPatient">
+  <div class="app-bg"></div>
+  <main class="shell">
+<section class="phone-frame wide-frame"><header class="topbar"><div><p class="eyebrow">Dossier complet médecin</p><h1 id="patient-title">Patient</h1><p class="muted" id="patient-subtitle"></p></div><div class="toolbar"><a href="/doctor.html" class="btn btn-secondary">Dashboard</a><button id="logout-btn" class="btn btn-secondary">Déconnexion</button></div></header><div id="doctor-patient-message"></div><section class="split-grid"><div class="section-block"><div class="section-title-row"><div><p class="section-kicker">Vue rapide</p><h3>Données critiques</h3></div><button id="archive-patient" class="btn btn-danger">Archiver</button></div><div class="stack"><div class="data-box"><h4>Groupe sanguin</h4><p id="dp-blood">—</p></div><div class="data-box"><h4>Contact urgence</h4><p id="dp-contact">—</p></div><div class="data-box"><h4>Allergies</h4><div id="dp-allergies" class="array-list"></div></div><div class="data-box"><h4>Pathologies urgence</h4><div id="dp-conditions" class="array-list"></div></div><div class="data-box"><h4>Notes privées</h4><p id="dp-notes">—</p></div></div></div><form id="doctor-patient-update-form" class="section-block stack"><div class="section-title-row"><div><p class="section-kicker">Modification</p><h3>Mettre à jour le dossier</h3></div></div><div class="grid-2"><div class="label-block"><label>Groupe sanguin</label><input name="blood_type" /></div><div class="label-block"><label>Contact urgence</label><input name="emergency_contact_name" /></div></div><div class="grid-2"><div class="label-block"><label>Numéro urgence</label><input name="emergency_contact_phone" /></div><div class="label-block"><label>Instructions</label><textarea name="emergency_instructions"></textarea></div></div><div class="grid-2"><div class="label-block"><label>Allergies</label><textarea name="public_allergies"></textarea></div><div class="label-block"><label>Pathologies urgence</label><textarea name="public_conditions"></textarea></div></div><div class="grid-2"><div class="label-block"><label>Médecin traitant</label><input name="doctor_name" /></div><div class="label-block"><label>RPPS</label><input name="doctor_rpps" /></div></div><div class="grid-2"><div class="label-block"><label>Traitements</label><textarea name="treatments"></textarea></div><div class="label-block"><label>Antécédents</label><textarea name="antecedents"></textarea></div></div><div class="grid-2"><div class="label-block"><label>Vaccinations</label><textarea name="vaccinations"></textarea></div><div class="label-block"><label>Ordonnances</label><textarea name="ordonnances"></textarea></div></div><div class="grid-3"><div class="label-block"><label>IMC</label><input name="imc" /></div><div class="label-block"><label>Tension</label><input name="blood_pressure" /></div><div class="label-block"><label>Notes</label><textarea name="notes"></textarea></div></div><button class="btn btn-primary" type="submit">Enregistrer</button></form></section></section>
+</main>
+  <script src="/app.js"></script>
+</body>
+</html>

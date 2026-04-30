@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedPass — Scanner</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="scanner">
+  <div class="app-bg"></div>
+  <main class="shell">
+<section class="phone-frame compact-frame"><header class="topbar"><div><p class="eyebrow">Mode secours</p><h1>Scanner un QR</h1></div><a href="/" class="btn btn-secondary">Accueil</a></header><section class="section-block center"><div class="app-card"><h3>Simulation de scan</h3><p class="muted">Colle le token du QR ou ouvre directement le lien public.</p><form id="scanner-form" class="stack" style="margin-top:12px;"><div class="label-block"><label>Token QR</label><input name="token" placeholder="token medpass" required /></div><button class="btn btn-primary btn-full" type="submit">Ouvrir la vue secours</button></form></div><div id="scanner-message"></div></section></section>
+</main>
+  <script src="/app.js"></script>
+</body>
+</html>

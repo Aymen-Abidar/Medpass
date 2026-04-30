@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedPass — Mon QR</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="patientQr">
+  <div class="app-bg"></div>
+  <main class="shell">
+<section class="phone-frame compact-frame"><header class="topbar"><div><p class="eyebrow">Patient</p><h1>Mon QR Code</h1></div><div class="toolbar"><a href="/client.html" class="btn btn-secondary">Dashboard</a><button id="logout-btn" class="btn btn-secondary">Déconnexion</button></div></header><section class="section-block center"><div class="qr-box"><img id="qr-image" alt="QR MedPass" /></div><p class="muted" style="margin-top:12px;">Le QR ouvre la vue secours publique.</p><div class="app-card"><p><strong>Token</strong></p><div class="code-box" id="qr-token">—</div></div><div class="app-card"><p><strong>Lien public</strong></p><div class="code-box" id="qr-url">—</div></div><div class="footer-row"><button id="regen-qr" class="btn btn-primary">Régénérer</button><button id="copy-url" class="btn btn-secondary">Copier le lien</button><a id="open-emergency" class="btn btn-secondary" href="/emergency.html">Ouvrir</a></div><div id="qr-message"></div></section></section>
+</main>
+  <script src="/app.js"></script>
+</body>
+</html>

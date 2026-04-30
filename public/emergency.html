@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedPass — Vue secours</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="emergency">
+  <div class="app-bg"></div>
+  <main class="shell">
+<section class="phone-frame compact-frame"><header class="topbar"><div><p class="eyebrow">Lecture seule urgence</p><h1>Vue secours</h1></div><a href="/scanner.html" class="btn btn-secondary">Scanner</a></header><form id="emergency-search-form" class="section-block stack"><div class="label-block"><label>Token QR</label><input id="emergency-token" name="token" placeholder="Coller un token si aucun n'est dans l'URL" /></div><button class="btn btn-secondary" type="submit">Charger le dossier public</button></form><div id="emergency-message"></div><section class="emergency-panel"><div class="section-title-row"><div><p class="section-kicker">Patient</p><h2 id="emergency-name">—</h2></div><span class="badge red">PUBLIC</span></div><div class="grid-2"><div class="alert-box"><p class="muted">Groupe sanguin</p><h1 id="emergency-blood">—</h1></div><div class="data-box"><p class="muted">Identifiant MedPass</p><p id="emergency-id">—</p></div></div><div class="data-box" style="margin-top:12px;"><h4>Allergies critiques</h4><div id="emergency-allergies" class="array-list"></div></div><div class="data-box" style="margin-top:12px;"><h4>Pathologies d'urgence</h4><div id="emergency-conditions" class="array-list"></div></div><div class="data-box" style="margin-top:12px;"><h4>Contact d'urgence</h4><p id="emergency-contact">—</p></div><div class="data-box" style="margin-top:12px;"><h4>Instructions</h4><p id="emergency-instructions">—</p></div></section></section>
+</main>
+  <script src="/app.js"></script>
+</body>
+</html>
