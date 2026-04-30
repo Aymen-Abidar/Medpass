@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 import qrcode
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import APP_NAME
@@ -249,7 +249,7 @@ def generate_qrcode(request: Request, user=Depends(require_role('patient'))):
             token = secrets.token_urlsafe(24)
             execute(conn,'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (user['id'], token, utcnow()))
             row = execute(conn, 'SELECT * FROM qrcodes WHERE patient_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', (user['id'],)).fetchone()
-    public_url = str(request.base_url).rstrip('/') + f'/emergency.html?token={row["token"]}'
+    public_url = str(request.base_url).rstrip('/') + f'/secours/{row["token"]}'
     img = qrcode.make(public_url)
     buffer = BytesIO()
     img.save(buffer, format='PNG')
@@ -271,6 +271,11 @@ def verify_qr(token: str):
     with get_conn() as conn:
         row = execute(conn, 'SELECT * FROM qrcodes WHERE token = ? AND is_active = 1', (token,)).fetchone()
         return {'valid': bool(row), 'patient_id': row['patient_id'] if row else None}
+
+
+@app.get('/secours/{token}')
+def secours_redirect(token: str):
+    return RedirectResponse(url=f'/emergency.html?token={token}', status_code=307)
 
 
 @app.get('/api/dossier/public/{token}')
