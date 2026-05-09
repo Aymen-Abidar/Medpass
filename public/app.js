@@ -65,6 +65,42 @@ function ensureActionModal(){
     </div>`);
   qs('#action-modal-close')?.addEventListener('click', () => qs('#action-modal')?.classList.add('hidden'));
 }
+function ensureVerificationModal(){
+  if(qs('#verification-modal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="verification-modal" class="action-modal hidden">
+      <div class="action-modal-box verification-modal-box">
+        <div class="action-modal-icon info">#</div>
+        <h3 id="verification-modal-title">Vérification de l’e-mail</h3>
+        <p id="verification-modal-text">Saisissez le code que nous venons d’envoyer à votre adresse e-mail.</p>
+        <form id="verification-modal-form" class="stack" style="margin-top:16px;">
+          <div class="label-block" style="text-align:left;">
+            <label>Code de vérification</label>
+            <input id="verification-code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Entrez le code" required />
+          </div>
+          <div id="verification-modal-message"></div>
+          <div class="hero-actions" style="margin-top:6px;">
+            <button type="button" id="verification-cancel" class="btn btn-secondary">Annuler</button>
+            <button type="submit" id="verification-submit" class="btn btn-primary">Vérifier</button>
+          </div>
+        </form>
+      </div>
+    </div>`);
+  qs('#verification-cancel')?.addEventListener('click', () => qs('#verification-modal')?.classList.add('hidden'));
+}
+
+function openVerificationModal(email){
+  ensureVerificationModal();
+  qs('#verification-modal-title').textContent = 'Vérification de l’e-mail';
+  qs('#verification-modal-text').textContent = `Un code de vérification a été envoyé à ${email}.`;
+  const input = qs('#verification-code-input');
+  const box = qs('#verification-modal-message');
+  if(box) box.innerHTML = '';
+  if(input) input.value = '';
+  qs('#verification-modal')?.classList.remove('hidden');
+  setTimeout(() => input?.focus(), 30);
+}
+
 function showActionModal(message, title='Opération réussie'){
   ensureActionModal();
   qs('#action-modal-title').textContent = title;
@@ -162,47 +198,79 @@ async function initLogin(){
 
 async function initSignup(){
   mountGlobalNav('signup', null);
-  const sendBtn = qs('#send-code-btn');
+  ensureVerificationModal();
   const form = qs('#signup-form');
   const roleSelect = qs('#signup-role');
   const pinWrap = qs('#doctor-pin-wrap');
   const box = qs('#signup-result');
+  let pendingSignupPayload = null;
+
   roleSelect?.addEventListener('change', () => pinWrap?.classList.toggle('hidden', roleSelect.value !== 'doctor'));
-  sendBtn?.addEventListener('click', async () => {
-    const email = form.elements['email'].value.trim();
-    if(!email){ showInlineMessage(box, 'Saisissez votre e-mail d’abord.', 'error'); return; }
+
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = {
+      first_name: form.elements['first_name'].value.trim(),
+      last_name: form.elements['last_name'].value.trim(),
+      email: form.elements['email'].value.trim(),
+      phone_number: form.elements['phone_number'].value.trim(),
+      birth_date: form.elements['birth_date'].value,
+      role: form.elements['role'].value,
+      doctor_pin: form.elements['doctor_pin']?.value.trim(),
+      password: form.elements['password'].value,
+    };
+    if(payload.role === 'doctor' && (!payload.doctor_pin || payload.doctor_pin.length !== 4)){
+      showInlineMessage(box, 'Le médecin doit saisir un PIN à 4 chiffres.', 'error');
+      return;
+    }
     try {
       const data = await api('/auth/send-email-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, purpose: 'signup' }),
+        body: JSON.stringify({ email: payload.email, purpose: 'signup' }),
       });
-      let msg = 'Code envoyé par e-mail.';
+      pendingSignupPayload = payload;
+      let msg = 'Le code de vérification a été envoyé automatiquement à votre e-mail.';
       if(data.dev_code) msg += ` Code local: ${data.dev_code}`;
-      success(box, msg, 'Code envoyé');
-    } catch (err) { showInlineMessage(box, err.message, 'error'); }
+      showInlineMessage(box, msg, 'success');
+      openVerificationModal(payload.email);
+    } catch (err) {
+      showInlineMessage(box, err.message, 'error');
+    }
   });
-  form?.addEventListener('submit', async (e) => {
+
+  qs('#verification-modal-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const modalBox = qs('#verification-modal-message');
+    const code = qs('#verification-code-input')?.value.trim();
+    if(!pendingSignupPayload){
+      showInlineMessage(modalBox, 'Veuillez remplir le formulaire d’inscription avant de vérifier le code.', 'error');
+      qs('#verification-modal')?.classList.add('hidden');
+      return;
+    }
+    if(!code){
+      showInlineMessage(modalBox, 'Saisissez le code de vérification reçu par e-mail.', 'error');
+      return;
+    }
     try {
       const data = await api('/auth/register-verified', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          first_name: form.elements['first_name'].value.trim(),
-          last_name: form.elements['last_name'].value.trim(),
-          email: form.elements['email'].value.trim(),
-          verification_code: form.elements['verification_code'].value.trim(),
-          phone_number: form.elements['phone_number'].value.trim(),
-          birth_date: form.elements['birth_date'].value,
-          password: form.elements['password'].value,
-          role: form.elements['role'].value,
-          doctor_pin: form.elements['doctor_pin'].value.trim(),
-        }),
+        body: JSON.stringify({ ...pendingSignupPayload, verification_code: code }),
       });
-      setToken(data.token); setUser(data.user);
-      location.href = data.user.role === 'doctor' ? '/doctor.html' : '/client.html';
-    } catch (err) { showInlineMessage(box, err.message, 'error'); }
+      setToken(data.token);
+      setUser(data.user);
+      qs('#verification-modal')?.classList.add('hidden');
+      form.reset();
+      pinWrap?.classList.add('hidden');
+      pendingSignupPayload = null;
+      success(box, 'Compte créé avec succès.', 'Compte créé');
+      setTimeout(() => {
+        location.href = data.user.role === 'doctor' ? '/doctor.html' : '/client.html';
+      }, 900);
+    } catch (err) {
+      showInlineMessage(modalBox, err.message, 'error');
+    }
   });
 }
 
@@ -535,7 +603,7 @@ async function initScanner(){
       const token = form.elements['token'].value.trim();
       const d = await api(`/qrcode/verify/${encodeURIComponent(token)}`);
       if(!d.valid) throw new Error('Token invalide.');
-      location.href = `/secours/${encodeURIComponent(token)}`;
+      location.href = `/emergency.html?token=${encodeURIComponent(token)}`;
     } catch(err){ showInlineMessage(box, err.message, 'error'); }
   });
 }
@@ -550,7 +618,7 @@ async function initEmergency(){
   qs('#emergency-search-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const t = e.currentTarget.elements['token'].value.trim();
-    location.href = `/secours/${encodeURIComponent(t)}`;
+    location.href = `/emergency.html?token=${encodeURIComponent(t)}`;
   });
   if(!token) return;
   try {

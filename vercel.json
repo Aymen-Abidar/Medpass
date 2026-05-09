@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/app/index.py" },
+    { "source": "/secours/(.*)", "destination": "/app/index.py" },
+    { "source": "/health", "destination": "/app/index.py" }
+  ]
+}
