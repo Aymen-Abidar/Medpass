@@ -402,23 +402,71 @@ async function initPatientQr(){
   mountGlobalNav('patientQr', user);
   qs('#logout-btn')?.addEventListener('click', logout);
   const box = qs('#qr-message');
+  let currentQrImage = '';
+  let currentPublicUrl = '';
+  let currentToken = '';
+
   async function load(){
     try {
       const d = await api('/qrcode/generate');
-      qs('#qr-image').src = d.image;
-      qs('#qr-token').textContent = d.token;
-      qs('#qr-url').textContent = d.public_url;
-      qs('#open-emergency').href = d.public_url;
+      currentQrImage = d.image || '';
+      currentPublicUrl = d.public_url || '';
+      currentToken = d.token || '';
+      qs('#qr-image').src = currentQrImage;
+      qs('#qr-token').textContent = currentToken;
+      qs('#qr-url').textContent = currentPublicUrl;
+      qs('#open-emergency').href = currentPublicUrl;
     } catch(err){ showInlineMessage(box, err.message, 'error'); }
   }
+
   qs('#regen-qr')?.addEventListener('click', async () => {
     try { await api('/qrcode/regenerate', { method: 'POST' }); await load(); success(box, 'QR régénéré avec succès.'); }
     catch(err){ showInlineMessage(box, err.message, 'error'); }
   });
+
   qs('#copy-url')?.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(qs('#qr-url').textContent.trim()); success(box, 'Lien copié avec succès.'); }
+    try { await navigator.clipboard.writeText(currentPublicUrl || qs('#qr-url').textContent.trim()); success(box, 'Lien copié avec succès.'); }
     catch(err){ showInlineMessage(box, err.message, 'error'); }
   });
+
+  qs('#download-qr')?.addEventListener('click', () => {
+    try {
+      if(!currentQrImage) throw new Error('QR introuvable.');
+      const a = document.createElement('a');
+      a.href = currentQrImage;
+      a.download = `medpass-qr-${currentToken || 'patient'}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      success(box, 'QR téléchargé avec succès.');
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+
+  qs('#print-qr')?.addEventListener('click', () => {
+    try {
+      if(!currentQrImage) throw new Error('QR introuvable.');
+      const w = window.open('', '_blank', 'width=600,height=700');
+      if(!w) throw new Error('Impossible d’ouvrir la fenêtre d’impression.');
+      w.document.write(`<!DOCTYPE html><html><head><title>Impression QR MedPass</title><style>body{font-family:Arial,sans-serif;padding:24px;text-align:center}img{max-width:320px;width:100%}p{word-break:break-all;color:#334}</style></head><body><h2>QR MedPass</h2><img src="${currentQrImage}" alt="QR MedPass" /><p>${currentPublicUrl}</p></body></html>`);
+      w.document.close();
+      w.focus();
+      w.print();
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+
+  qs('#share-qr')?.addEventListener('click', async () => {
+    try {
+      if(!currentPublicUrl) throw new Error('Lien du QR introuvable.');
+      if(navigator.share){
+        await navigator.share({ title: 'QR MedPass', text: 'Accès secours du patient', url: currentPublicUrl });
+        success(box, 'QR partagé avec succès.');
+      } else {
+        await navigator.clipboard.writeText(currentPublicUrl);
+        success(box, 'Le partage n’est pas disponible ici. Le lien a été copié.');
+      }
+    } catch(err){ if(err?.name !== 'AbortError') showInlineMessage(box, err.message, 'error'); }
+  });
+
   load();
 }
 
@@ -603,7 +651,7 @@ async function initScanner(){
       const token = form.elements['token'].value.trim();
       const d = await api(`/qrcode/verify/${encodeURIComponent(token)}`);
       if(!d.valid) throw new Error('Token invalide.');
-      location.href = `/emergency.html?token=${encodeURIComponent(token)}`;
+      location.href = `/secours/${encodeURIComponent(token)}`;
     } catch(err){ showInlineMessage(box, err.message, 'error'); }
   });
 }
@@ -618,7 +666,7 @@ async function initEmergency(){
   qs('#emergency-search-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const t = e.currentTarget.elements['token'].value.trim();
-    location.href = `/emergency.html?token=${encodeURIComponent(t)}`;
+    location.href = `/secours/${encodeURIComponent(t)}`;
   });
   if(!token) return;
   try {
