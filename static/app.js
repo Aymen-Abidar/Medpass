@@ -1,97 +1,586 @@
-const API = '/api';
-const qs = (s, r = document) => r.querySelector(s);
-const getToken = () => localStorage.getItem('medpass_token') || '';
-const getUser = () => { try { return JSON.parse(localStorage.getItem('medpass_user') || 'null'); } catch { return null; } };
-const setSession = (token, user) => { localStorage.setItem('medpass_token', token); localStorage.setItem('medpass_user', JSON.stringify(user)); };
-const clearSession = () => { localStorage.removeItem('medpass_token'); localStorage.removeItem('medpass_user'); sessionStorage.removeItem('medpass_doctor_pin'); };
-const getDoctorPin = () => sessionStorage.getItem('medpass_doctor_pin') || '';
-const setDoctorPin = pin => sessionStorage.setItem('medpass_doctor_pin', pin);
-const logout = () => { clearSession(); location.href = '/login.html'; };
-const parseList = text => text.split('\n').map(x => x.trim()).filter(Boolean);
-const fmtDate = s => s ? new Date(s).toLocaleString() : '—';
-const escapeHtml = s => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const renderBadges = items => !items || !items.length ? '<span class="muted">Aucune donnée</span>' : items.map(i => `<span class="array-item">${escapeHtml(i)}</span>`).join('');
-const jsonHeaders = (extra={}) => {
-  const h = {'Content-Type':'application/json', ...extra};
-  const t = getToken(); if (t) h.Authorization = `Bearer ${t}`;
-  const pin = getDoctorPin(); if (pin) h['X-Doctor-PIN'] = pin;
-  return h;
-};
-async function api(path, opts={}) {
-  const res = await fetch(`${API}${path}`, opts);
-  const isJson = (res.headers.get('content-type') || '').includes('application/json');
-  const data = isJson ? await res.json() : await res.text();
-  if (!res.ok) throw new Error(data.detail || data.message || 'Erreur');
+const API_BASE = '/api';
+const TOKEN_KEY = 'medpass_token';
+const USER_KEY = 'medpass_user';
+const DOCTOR_PIN_KEY = 'medpass_doctor_pin_meta';
+const DOCTOR_PIN_TTL_MS = 60 * 60 * 1000;
+
+const qs = (sel, root = document) => root.querySelector(sel);
+const qsa = (sel, root = document) => [...root.querySelectorAll(sel)];
+const getToken = () => localStorage.getItem(TOKEN_KEY) || '';
+const setToken = (token) => localStorage.setItem(TOKEN_KEY, token);
+const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+const getUser = () => { try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; } };
+const setUser = (user) => localStorage.setItem(USER_KEY, JSON.stringify(user));
+const clearUser = () => localStorage.removeItem(USER_KEY);
+
+function getDoctorPinMeta(){
+  try { return JSON.parse(sessionStorage.getItem(DOCTOR_PIN_KEY) || 'null'); } catch { return null; }
+}
+function getDoctorPin(){
+  const meta = getDoctorPinMeta();
+  if(!meta || !meta.pin || !meta.at) return '';
+  if(Date.now() - meta.at > DOCTOR_PIN_TTL_MS){ clearDoctorPin(); return ''; }
+  return meta.pin;
+}
+function setDoctorPin(pin){ sessionStorage.setItem(DOCTOR_PIN_KEY, JSON.stringify({ pin, at: Date.now() })); }
+function clearDoctorPin(){ sessionStorage.removeItem(DOCTOR_PIN_KEY); }
+
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>"']/g, s => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[s]));
+}
+function parseList(text){ return String(text || '').split(/\n|,/).map(x => x.trim()).filter(Boolean); }
+function renderBadges(items){
+  const arr = items || [];
+  if(!arr.length) return '<span class="array-item">Aucune</span>';
+  return arr.map(item => `<span class="array-item">${escapeHtml(item.title || item)}</span>`).join('');
+}
+
+async function api(path, options = {}){
+  const headers = new Headers(options.headers || {});
+  if(getToken()) headers.set('Authorization', `Bearer ${getToken()}`);
+  const pin = getDoctorPin();
+  if(pin) headers.set('X-Doctor-Pin', pin);
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const contentType = res.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await res.json() : await res.text();
+  if(!res.ok){ throw new Error((data && data.detail) || 'Une erreur est survenue.'); }
   return data;
 }
-function flash(el, msg, type='info'){ if(el) el.innerHTML = `<div class="message ${type}">${msg}</div>`; }
-function protect(role){ const u=getUser(); if(!u||!getToken()){ location.href='/login.html'; return null;} if(role&&u.role!==role){ location.href=u.role==='doctor'?'/doctor.html':'/client.html'; return null;} return u; }
-function hardenCredentialForms(root=document){
-  root.querySelectorAll('form[data-no-autofill="true"]').forEach(form=>{
-    form.setAttribute('autocomplete','off');
-    form.setAttribute('data-lpignore','true');
-    form.setAttribute('data-1p-ignore','true');
-    form.setAttribute('data-bwignore','true');
-    form.querySelectorAll('input[type="email"], input[type="password"], input[data-sensitive="true"]').forEach(input=>{
-      if(input.type === 'password'){
-        input.setAttribute('autocomplete', 'new-password');
-      } else {
-        input.setAttribute('autocomplete', 'off');
-        input.setAttribute('autocapitalize', 'off');
-        input.setAttribute('spellcheck', 'false');
-      }
-      input.setAttribute('data-lpignore','true');
-      input.setAttribute('data-1p-ignore','true');
-      input.setAttribute('data-bwignore','true');
-      input.setAttribute('readonly','readonly');
-      const unlock = () => input.removeAttribute('readonly');
-      input.addEventListener('focus', unlock, {once:true});
-      input.addEventListener('pointerdown', unlock, {once:true});
-      input.addEventListener('keydown', unlock, {once:true});
-    });
-  });
+
+function showInlineMessage(el, message, type='info'){
+  if(!el) return;
+  el.className = `message ${type}`;
+  el.textContent = message;
+}
+function ensureActionModal(){
+  if(qs('#action-modal')) return;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="action-modal" class="action-modal hidden">
+      <div class="action-modal-box">
+        <div class="action-modal-icon">✓</div>
+        <h3 id="action-modal-title">Succès</h3>
+        <p id="action-modal-text"></p>
+        <button id="action-modal-close" class="btn btn-primary">Fermer</button>
+      </div>
+    </div>`);
+  qs('#action-modal-close')?.addEventListener('click', () => qs('#action-modal')?.classList.add('hidden'));
+}
+function showActionModal(message, title='Opération réussie'){
+  ensureActionModal();
+  qs('#action-modal-title').textContent = title;
+  qs('#action-modal-text').textContent = message;
+  qs('#action-modal')?.classList.remove('hidden');
+}
+function success(el, message, title='Opération réussie'){
+  showInlineMessage(el, message, 'success');
+  showActionModal(message, title);
+}
+
+function logout(){
+  clearToken(); clearUser(); clearDoctorPin();
+  location.href = '/login.html';
+}
+
+function mountGlobalNav(page, user){
+  const nav = qs('#global-nav');
+  if(!nav) return;
+  let links = [];
+  if(user?.role === 'patient'){
+    links = [
+      ['/client.html', 'Accueil patient', page === 'client'],
+      ['/patient-profile.html', 'Mon profil', page === 'patientProfile'],
+      ['/patient-qr.html', 'Mon QR', page === 'patientQr'],
+      ['/scanner.html', 'Scanner', page === 'scanner'],
+    ];
+  } else if(user?.role === 'doctor'){
+    links = [
+      ['/doctor.html', 'Dashboard', page === 'doctor' && !location.search.includes('view=archived')],
+      ['/doctor.html?view=archived', 'Archived', location.search.includes('view=archived')],
+      ['/doctor-form.html', 'Créer / lier un patient', page === 'doctorForm'],
+      ['/doctor-pin.html', 'Valider PIN', page === 'doctorPin'],
+      ['/scanner.html', 'Scanner', page === 'scanner'],
+    ];
+  } else {
+    links = [
+      ['/', 'Accueil', page === 'landing'],
+      ['/login.html', 'Entrer dans l’app', page === 'login'],
+      ['/signup.html', 'Créer un compte', page === 'signup'],
+      ['/scanner.html', 'Scanner', page === 'scanner'],
+    ];
+  }
+  nav.innerHTML = links.map(([href, label, active]) => `<a class="nav-link ${active ? 'active' : ''}" href="${href}">${label}</a>`).join('');
+}
+
+function protect(expectedRole){
+  const user = getUser();
+  if(!getToken() || !user){ location.href = '/login.html'; return null; }
+  if(user.role !== expectedRole){ location.href = user.role === 'doctor' ? '/doctor.html' : '/client.html'; return null; }
+  if(user.role === 'patient' && user.must_complete_onboarding && !location.pathname.endsWith('/onboarding.html')){
+    location.href = '/onboarding.html'; return null;
+  }
+  return user;
+}
+
+async function refreshUser(){
+  try {
+    const me = await api('/auth/me');
+    const user = { ...getUser(), ...me };
+    setUser(user);
+    return user;
+  } catch {
+    return getUser();
+  }
 }
 
 async function initLogin(){
-  const lf = qs('#login-form'), rf = qs('#register-form'), role = qs('#register-role'), wrap = qs('#doctor-pin-wrap'), box = qs('#auth-result');
-  hardenCredentialForms(document);
-  if(role) role.addEventListener('change', ()=>wrap.classList.toggle('hidden', role.value !== 'doctor'));
-  if(lf) lf.addEventListener('submit', async e=>{ e.preventDefault(); try{ const payload={ email: lf.elements['login_email'].value.trim(), password: lf.elements['login_password'].value }; const data=await api('/auth/login',{method:'POST',headers:jsonHeaders(),body:JSON.stringify(payload)}); setSession(data.token,data.user); location.href=data.user.role==='doctor'?'/doctor.html':'/client.html'; }catch(err){flash(box,err.message,'error');}});
-  if(rf) rf.addEventListener('submit', async e=>{ e.preventDefault(); try{ const payload={ first_name: rf.elements['first_name'].value.trim(), last_name: rf.elements['last_name'].value.trim(), email: rf.elements['register_email'].value.trim(), birth_date: rf.elements['birth_date'].value, password: rf.elements['register_password'].value, role: rf.elements['role'].value, doctor_pin: rf.elements['doctor_pin'].value.trim() }; const data=await api('/auth/register',{method:'POST',headers:jsonHeaders(),body:JSON.stringify(payload)}); setSession(data.token,data.user); if(payload.role==='doctor'&&payload.doctor_pin) setDoctorPin(payload.doctor_pin); location.href=data.user.role==='doctor'?'/doctor.html':'/client.html'; }catch(err){flash(box,err.message,'error');}});
+  mountGlobalNav('login', null);
+  const form = qs('#login-form');
+  const box = qs('#auth-result');
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const data = await api('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: form.elements['login_email'].value.trim(),
+          password: form.elements['login_password'].value,
+        }),
+      });
+      setToken(data.token);
+      setUser(data.user);
+      if(data.user.must_complete_onboarding){
+        location.href = '/onboarding.html';
+        return;
+      }
+      location.href = data.user.role === 'doctor' ? '/doctor.html' : '/client.html';
+    } catch (err) {
+      showInlineMessage(box, err.message, 'error');
+    }
+  });
+}
+
+async function initSignup(){
+  mountGlobalNav('signup', null);
+  const sendBtn = qs('#send-code-btn');
+  const form = qs('#signup-form');
+  const roleSelect = qs('#signup-role');
+  const pinWrap = qs('#doctor-pin-wrap');
+  const box = qs('#signup-result');
+  roleSelect?.addEventListener('change', () => pinWrap?.classList.toggle('hidden', roleSelect.value !== 'doctor'));
+  sendBtn?.addEventListener('click', async () => {
+    const email = form.elements['email'].value.trim();
+    if(!email){ showInlineMessage(box, 'Saisissez votre e-mail d’abord.', 'error'); return; }
+    try {
+      const data = await api('/auth/send-email-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, purpose: 'signup' }),
+      });
+      let msg = 'Code envoyé par e-mail.';
+      if(data.dev_code) msg += ` Code local: ${data.dev_code}`;
+      success(box, msg, 'Code envoyé');
+    } catch (err) { showInlineMessage(box, err.message, 'error'); }
+  });
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const data = await api('/auth/register-verified', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: form.elements['first_name'].value.trim(),
+          last_name: form.elements['last_name'].value.trim(),
+          email: form.elements['email'].value.trim(),
+          verification_code: form.elements['verification_code'].value.trim(),
+          phone_number: form.elements['phone_number'].value.trim(),
+          birth_date: form.elements['birth_date'].value,
+          password: form.elements['password'].value,
+          role: form.elements['role'].value,
+          doctor_pin: form.elements['doctor_pin'].value.trim(),
+        }),
+      });
+      setToken(data.token); setUser(data.user);
+      location.href = data.user.role === 'doctor' ? '/doctor.html' : '/client.html';
+    } catch (err) { showInlineMessage(box, err.message, 'error'); }
+  });
+}
+
+async function initOnboarding(){
+  const user = protect('patient'); if(!user) return;
+  mountGlobalNav('onboarding', user);
+  const form = qs('#onboarding-form');
+  const box = qs('#onboarding-result');
+  qs('#onboarding-email').textContent = user.email;
+  qs('#onboarding-email-input').value = user.email;
+  qs('#send-onboarding-code')?.addEventListener('click', async () => {
+    try {
+      const data = await api('/auth/send-email-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user.email, purpose: 'onboarding' }),
+      });
+      let msg = 'Code de confirmation envoyé.';
+      if(data.dev_code) msg += ` Code local: ${data.dev_code}`;
+      success(box, msg, 'Code envoyé');
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const data = await api('/auth/complete-onboarding', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: user.email,
+          verification_code: form.elements['verification_code'].value.trim(),
+          new_password: form.elements['new_password'].value,
+          phone_number: form.elements['phone_number'].value.trim(),
+        }),
+      });
+      setToken(data.token); setUser(data.user);
+      location.href = '/client.html';
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
 }
 
 async function initClient(){
-  const user = protect('patient'); if(!user) return; qs('#logout-btn')?.addEventListener('click',logout); qs('#patient-name').textContent=`${user.first_name} ${user.last_name}`;
-  try{ const dossier=await api('/dossier/mon-dossier',{headers:jsonHeaders()}); qs('#blood-type').textContent=dossier.blood_type||'—'; qs('#allergies-list').innerHTML=renderBadges(dossier.public_allergies); qs('#conditions-list').innerHTML=renderBadges(dossier.public_conditions); qs('#emergency-contact').textContent=dossier.emergency_contact_name?`${dossier.emergency_contact_name} — ${dossier.emergency_contact_phone}`:'Non renseigné'; qs('#patient-updated').textContent=fmtDate(dossier.updated_at); qs('#patient-summary').textContent=dossier.private_data?.notes||'Aucune note privée enregistrée.'; const logs=await api('/dossier/logs',{headers:jsonHeaders()}); const c=qs('#access-logs'); c.innerHTML=logs.items.length?logs.items.map(log=>`<div class="log-card"><strong>${log.access_role==='doctor'?'Médecin':'Secours'}</strong><p class="muted">${log.first_name?`${log.first_name} ${log.last_name}`:'Accès public'} • ${log.access_level}</p><p>${fmtDate(log.created_at)} • IP ${log.ip_address||'n/a'}</p></div>`).join(''):'<div class="log-card"><p class="muted">Aucun accès enregistré.</p></div>'; }catch(err){ flash(qs('#client-message'),err.message,'error'); }
+  let user = protect('patient'); if(!user) return;
+  user = await refreshUser();
+  mountGlobalNav('client', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const box = qs('#client-message');
+  try {
+    const dossier = await api('/dossier/mon-dossier');
+    qs('#patient-name').textContent = `${user.first_name} ${user.last_name}`;
+    qs('#blood-type').textContent = dossier.blood_type || 'À compléter';
+    qs('#allergies-list').innerHTML = renderBadges(dossier.public_allergies);
+    qs('#conditions-list').innerHTML = renderBadges(dossier.public_conditions);
+    qs('#patient-updated').textContent = dossier.updated_at ? new Date(dossier.updated_at).toLocaleDateString('fr-FR') : '—';
+    qs('#emergency-contact').textContent = dossier.emergency_contact_name ? `${dossier.emergency_contact_name} — ${dossier.emergency_contact_phone}` : 'À compléter dans le profil';
+    qs('#patient-summary').textContent = dossier.linked_to_doctor ? 'Votre dossier médical privé est complété par votre médecin.' : 'Aucun médecin ne vous a encore lié à son espace.';
+    renderAppointments(dossier.appointments || []);
+  } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  qs('#appointment-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    try {
+      const data = await api('/patient/appointments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: form.elements['date'].value, time: form.elements['time'].value, title: form.elements['title'].value.trim() }),
+      });
+      renderAppointments(data.items || []);
+      form.reset();
+      success(box, 'Rendez-vous ajouté avec succès.');
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+}
+
+function renderAppointments(items){
+  const list = qs('#appointments-list');
+  if(!list) return;
+  if(!items.length){ list.innerHTML = '<div class="patient-card"><p class="muted">Aucun rendez-vous enregistré.</p></div>'; return; }
+  list.innerHTML = items.map((item, index) => `
+    <div class="patient-card">
+      <div class="split"><div><h4>${escapeHtml(item.title)}</h4><p class="muted">${escapeHtml(item.date)} ${item.time ? '• ' + escapeHtml(item.time) : ''}</p></div>
+      <button class="btn btn-secondary" data-delete-appointment="${index}">Supprimer</button></div>
+    </div>`).join('');
+  qsa('[data-delete-appointment]').forEach(btn => btn.addEventListener('click', async () => {
+    try {
+      const data = await api(`/patient/appointments/${btn.dataset.deleteAppointment}`, { method: 'DELETE' });
+      renderAppointments(data.items || []);
+      success(qs('#client-message'), 'Rendez-vous supprimé avec succès.');
+    } catch(err){ showInlineMessage(qs('#client-message'), err.message, 'error'); }
+  }));
 }
 
 async function initPatientProfile(){
-  const user=protect('patient'); if(!user) return; qs('#logout-btn')?.addEventListener('click',logout); const f=qs('#patient-profile-form'), box=qs('#profile-message');
-  try{ const d=await api('/dossier/mon-dossier',{headers:jsonHeaders()}); qs('#pp-name').textContent=`${user.first_name} ${user.last_name}`; f.elements['blood_type'].value=d.blood_type||''; f.elements['public_allergies'].value=(d.public_allergies||[]).join('\n'); f.elements['public_conditions'].value=(d.public_conditions||[]).join('\n'); f.elements['emergency_contact_name'].value=d.emergency_contact_name||''; f.elements['emergency_contact_phone'].value=d.emergency_contact_phone||''; f.elements['emergency_instructions'].value=d.emergency_instructions||''; f.elements['doctor_name'].value=d.private_data?.doctor_name||''; f.elements['doctor_rpps'].value=d.private_data?.doctor_rpps||''; f.elements['treatments'].value=(d.private_data?.treatments||[]).map(x=>x.name||'').join('\n'); f.elements['antecedents'].value=(d.private_data?.antecedents||[]).join('\n'); f.elements['vaccinations'].value=(d.private_data?.vaccinations||[]).map(x=>x.name||'').join('\n'); f.elements['ordonnances'].value=(d.private_data?.ordonnances||[]).map(x=>x.title||'').join('\n'); f.elements['imc'].value=d.private_data?.imc||''; f.elements['blood_pressure'].value=d.private_data?.blood_pressure||''; f.elements['notes'].value=d.private_data?.notes||''; }catch(err){ flash(box,err.message,'error'); }
-  f?.addEventListener('submit', async e=>{ e.preventDefault(); const p={ blood_type:f.elements['blood_type'].value.trim(), public_allergies:parseList(f.elements['public_allergies'].value), public_conditions:parseList(f.elements['public_conditions'].value), emergency_contact_name:f.elements['emergency_contact_name'].value.trim(), emergency_contact_phone:f.elements['emergency_contact_phone'].value.trim(), emergency_instructions:f.elements['emergency_instructions'].value.trim(), private_data:{ doctor_name:f.elements['doctor_name'].value.trim(), doctor_rpps:f.elements['doctor_rpps'].value.trim(), treatments:parseList(f.elements['treatments'].value).map(v=>({name:v})), antecedents:parseList(f.elements['antecedents'].value), vaccinations:parseList(f.elements['vaccinations'].value).map(v=>({name:v})), ordonnances:parseList(f.elements['ordonnances'].value).map(v=>({title:v})), imc:f.elements['imc'].value.trim(), blood_pressure:f.elements['blood_pressure'].value.trim(), notes:f.elements['notes'].value.trim() } }; try{ await api('/dossier/mon-dossier',{method:'PUT',headers:jsonHeaders(),body:JSON.stringify(p)}); flash(box,'Profil médical enregistré avec succès.','success'); }catch(err){ flash(box,err.message,'error'); } });
+  let user = protect('patient'); if(!user) return;
+  user = await refreshUser();
+  mountGlobalNav('patientProfile', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const form = qs('#patient-profile-form');
+  const box = qs('#profile-message');
+  try {
+    const dossier = await api('/dossier/mon-dossier');
+    qs('#pp-name').textContent = 'Mon profil';
+    form.elements['blood_type'].value = dossier.blood_type || '';
+    form.elements['emergency_contact_name'].value = dossier.emergency_contact_name || '';
+    form.elements['emergency_contact_phone'].value = dossier.emergency_contact_phone || '';
+    form.elements['public_allergies'].value = (dossier.public_allergies || []).join('\n');
+    form.elements['public_conditions'].value = (dossier.public_conditions || []).join('\n');
+    form.elements['emergency_instructions'].value = dossier.emergency_instructions || '';
+    qs('#doctor-locked-state').textContent = dossier.linked_to_doctor ? 'Le dossier médical privé est géré par votre médecin.' : 'Le médecin complètera le dossier privé après vous avoir lié à son espace.';
+  } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('/dossier/mon-dossier', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blood_type: form.elements['blood_type'].value.trim(),
+          emergency_contact_name: form.elements['emergency_contact_name'].value.trim(),
+          emergency_contact_phone: form.elements['emergency_contact_phone'].value.trim(),
+          public_allergies: parseList(form.elements['public_allergies'].value),
+          public_conditions: parseList(form.elements['public_conditions'].value),
+          emergency_instructions: form.elements['emergency_instructions'].value.trim(),
+        }),
+      });
+      success(box, 'Profil patient mis à jour avec succès.');
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
 }
 
 async function initPatientQr(){
-  const user=protect('patient'); if(!user) return; qs('#logout-btn')?.addEventListener('click',logout); const box=qs('#qr-message');
-  async function load(){ try{ const d=await api('/qrcode/generate',{headers:jsonHeaders()}); qs('#qr-image').src=d.image; qs('#qr-token').textContent=d.token; qs('#qr-url').textContent=d.public_url; qs('#open-emergency').href=d.public_url; }catch(err){ flash(box,err.message,'error'); } }
-  qs('#regen-qr')?.addEventListener('click', async()=>{ try{ await api('/qrcode/regenerate',{method:'POST',headers:jsonHeaders()}); flash(box,'Nouveau QR généré.','success'); load(); }catch(err){ flash(box,err.message,'error'); } });
-  qs('#copy-url')?.addEventListener('click', async()=>{ const text=qs('#qr-url').textContent.trim(); if(text){ await navigator.clipboard.writeText(text); flash(box,'Lien copié.','success'); } });
+  const user = protect('patient'); if(!user) return;
+  mountGlobalNav('patientQr', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const box = qs('#qr-message');
+  async function load(){
+    try {
+      const d = await api('/qrcode/generate');
+      qs('#qr-image').src = d.image;
+      qs('#qr-token').textContent = d.token;
+      qs('#qr-url').textContent = d.public_url;
+      qs('#open-emergency').href = d.public_url;
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  }
+  qs('#regen-qr')?.addEventListener('click', async () => {
+    try { await api('/qrcode/regenerate', { method: 'POST' }); await load(); success(box, 'QR régénéré avec succès.'); }
+    catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+  qs('#copy-url')?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(qs('#qr-url').textContent.trim()); success(box, 'Lien copié avec succès.'); }
+    catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
   load();
 }
 
-async function initDoctorPin(){ const user=protect('doctor'); if(!user) return; qs('#logout-btn')?.addEventListener('click',logout); const f=qs('#doctor-pin-form'), box=qs('#pin-message'); if(getDoctorPin()) flash(box,'PIN déjà mémorisé dans cette session.','success'); f?.addEventListener('submit', async e=>{ e.preventDefault(); const pin=f.elements['pin'].value.trim(); try{ await api('/doctor/verify-pin',{method:'POST',headers:jsonHeaders(),body:JSON.stringify({pin})}); setDoctorPin(pin); flash(box,'PIN validé.','success'); }catch(err){ flash(box,err.message,'error'); } }); }
+async function initDoctorPin(){
+  const user = protect('doctor'); if(!user) return;
+  mountGlobalNav('doctorPin', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const form = qs('#doctor-pin-form');
+  const box = qs('#pin-message');
+  const meta = getDoctorPinMeta();
+  if(meta && getDoctorPin()) showInlineMessage(box, 'PIN validé pour cette session pendant 1 heure.', 'success');
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const data = await api('/doctor/verify-pin', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: form.elements['pin'].value.trim() }),
+      });
+      setDoctorPin(form.elements['pin'].value.trim());
+      success(box, `PIN validé pour ${data.valid_for_minutes} minutes.`);
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+}
 
-async function initDoctor(){ const user=protect('doctor'); if(!user) return; qs('#logout-btn')?.addEventListener('click',logout); qs('#doctor-name').textContent=`${user.first_name} ${user.last_name}`; const box=qs('#doctor-message'); try{ const d=await api('/patients',{headers:jsonHeaders()}); qs('#doctor-count').textContent=d.items.length; qs('#critical-count').textContent=d.items.filter(x=>(x.public_allergies||[]).length).length; qs('#archived-count').textContent=d.items.filter(x=>x.is_archived).length; qs('#doctor-patient-list').innerHTML=d.items.length?d.items.map(p=>`<div class="patient-card"><div class="split"><div><h4>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</h4><p class="muted">${escapeHtml(p.email)} • Groupe ${escapeHtml(p.blood_type||'—')}</p></div><span class="status-pill ${p.is_archived?'danger':'success'}">${p.is_archived?'Archivé':'Actif'}</span></div><div class="array-list" style="margin:10px 0 12px;">${renderBadges(p.public_conditions||[])}</div><div class="split"><span class="muted">Allergies: ${(p.public_allergies||[]).length}</span><a class="btn btn-secondary" href="/doctor-patient.html?id=${p.id}">Ouvrir le dossier</a></div></div>`).join(''):'<div class="patient-card"><p class="muted">Aucun patient.</p></div>'; }catch(err){ flash(box,err.message+' — ouvre la page PIN si besoin.','error'); } }
+async function initDoctor(){
+  const user = protect('doctor'); if(!user) return;
+  mountGlobalNav('doctor', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  qs('#doctor-name').textContent = `${user.first_name} ${user.last_name}`;
+  const box = qs('#doctor-message');
+  const isArchivedView = new URLSearchParams(location.search).get('view') === 'archived';
+  try {
+    const data = await api(`/patients${isArchivedView ? '?include_archived=true' : ''}`);
+    const items = (data.items || []).filter(item => isArchivedView ? item.is_archived : !item.is_archived);
+    qs('#doctor-count').textContent = (data.items || []).filter(x => !x.is_archived).length;
+    qs('#critical-count').textContent = (data.items || []).filter(x => (x.public_allergies || []).length).length;
+    qs('#archived-count').textContent = (data.items || []).filter(x => x.is_archived).length;
+    qs('#doctor-section-title').textContent = isArchivedView ? 'Patients archivés' : 'Patients actifs';
+    qs('#doctor-patient-list').innerHTML = items.length ? items.map(p => `
+      <div class="patient-card">
+        <div class="split"><div><h4>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</h4><p class="muted">${escapeHtml(p.email)}${p.phone_number ? ' • ' + escapeHtml(p.phone_number) : ''}</p></div>
+        <span class="status-pill ${p.is_archived ? 'danger' : 'success'}">${p.is_archived ? 'Archivé' : 'Actif'}</span></div>
+        <div class="array-list" style="margin:10px 0 12px;">${renderBadges(p.public_conditions || [])}</div>
+        <div class="split">
+          <span class="muted">Allergies: ${(p.public_allergies || []).length}</span>
+          ${p.is_archived ? `<button class="btn btn-secondary" data-restore="${p.id}">Désarchiver</button>` : `<a class="btn btn-secondary" href="/doctor-patient.html?id=${p.id}">Ouvrir le dossier</a>`}
+        </div>
+      </div>`).join('') : '<div class="patient-card"><p class="muted">Aucun patient à afficher.</p></div>';
+    qsa('[data-restore]').forEach(btn => btn.addEventListener('click', async () => {
+      try { await api(`/patients/${btn.dataset.restore}/restore`, { method: 'POST' }); success(box, 'Patient désarchivé avec succès.'); initDoctor(); }
+      catch(err){ showInlineMessage(box, err.message, 'error'); }
+    }));
+  } catch(err){ showInlineMessage(box, `${err.message} — validez le PIN si nécessaire.`, 'error'); }
+}
 
-async function initDoctorForm(){ const user=protect('doctor'); if(!user) return; qs('#logout-btn')?.addEventListener('click',logout); const f=qs('#doctor-create-patient-form'), box=qs('#doctor-form-message'); hardenCredentialForms(f.closest('body') || document); f?.addEventListener('submit', async e=>{ e.preventDefault(); const p={ email:f.elements['patient_email'].value.trim(), password:f.elements['patient_password'].value.trim(), first_name:f.elements['first_name'].value.trim(), last_name:f.elements['last_name'].value.trim(), birth_date:f.elements['birth_date'].value.trim(), blood_type:f.elements['blood_type'].value.trim(), public_allergies:parseList(f.elements['public_allergies'].value), public_conditions:parseList(f.elements['public_conditions'].value), emergency_contact_name:f.elements['emergency_contact_name'].value.trim(), emergency_contact_phone:f.elements['emergency_contact_phone'].value.trim(), emergency_instructions:f.elements['emergency_instructions'].value.trim(), private_data:{ doctor_name:f.elements['doctor_name'].value.trim(), doctor_rpps:f.elements['doctor_rpps'].value.trim(), treatments:parseList(f.elements['treatments'].value).map(v=>({name:v})), antecedents:parseList(f.elements['antecedents'].value), vaccinations:parseList(f.elements['vaccinations'].value).map(v=>({name:v})), ordonnances:parseList(f.elements['ordonnances'].value).map(v=>({title:v})), imc:f.elements['imc'].value.trim(), blood_pressure:f.elements['blood_pressure'].value.trim(), notes:f.elements['notes'].value.trim() } }; try{ const d=await api('/patients',{method:'POST',headers:jsonHeaders(),body:JSON.stringify(p)}); flash(box,`Patient créé: ${d.first_name} ${d.last_name}.`,'success'); f.reset(); }catch(err){ flash(box,err.message+' — vérifie ton PIN.','error'); } }); }
+async function initDoctorForm(){
+  const user = protect('doctor'); if(!user) return;
+  mountGlobalNav('doctorForm', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const form = qs('#doctor-create-patient-form');
+  const box = qs('#doctor-form-message');
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        email: form.elements['patient_email'].value.trim(),
+        password: form.elements['patient_password'].value,
+        first_name: form.elements['first_name'].value.trim(),
+        last_name: form.elements['last_name'].value.trim(),
+        birth_date: form.elements['birth_date'].value,
+        phone_number: form.elements['phone_number'].value.trim(),
+        blood_type: form.elements['blood_type'].value.trim(),
+        emergency_contact_name: form.elements['emergency_contact_name'].value.trim(),
+        emergency_contact_phone: form.elements['emergency_contact_phone'].value.trim(),
+        emergency_instructions: form.elements['emergency_instructions'].value.trim(),
+        public_allergies: parseList(form.elements['public_allergies'].value),
+        public_conditions: parseList(form.elements['public_conditions'].value),
+        private_data: {
+          doctor_name: form.elements['doctor_name'].value.trim(),
+          doctor_rpps: form.elements['doctor_rpps'].value.trim(),
+          notes: form.elements['notes'].value.trim(),
+          cases: []
+        }
+      };
+      const data = await api('/patients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      form.reset();
+      success(box, `Patient créé ou lié avec succès : ${data.first_name} ${data.last_name}.`, 'Patient enregistré');
+    } catch(err){ showInlineMessage(box, `${err.message} — validez votre PIN si nécessaire.`, 'error'); }
+  });
+}
 
-async function initDoctorPatient(){ const user=protect('doctor'); if(!user) return; qs('#logout-btn')?.addEventListener('click',logout); const box=qs('#doctor-patient-message'); const id=new URLSearchParams(location.search).get('id'); if(!id){ flash(box,'ID patient manquant.','error'); return; } const f=qs('#doctor-patient-update-form'); async function load(){ try{ const d=await api(`/patients/${id}`,{headers:jsonHeaders()}); qs('#patient-title').textContent=`${d.first_name} ${d.last_name}`; qs('#patient-subtitle').textContent=`${d.email} • ${d.birth_date||'Date inconnue'}`; qs('#dp-blood').textContent=d.blood_type||'—'; qs('#dp-contact').textContent=d.emergency_contact_name?`${d.emergency_contact_name} — ${d.emergency_contact_phone}`:'Non renseigné'; qs('#dp-allergies').innerHTML=renderBadges(d.public_allergies); qs('#dp-conditions').innerHTML=renderBadges(d.public_conditions); qs('#dp-notes').textContent=d.private_data?.notes||'Aucune note.'; f.elements['blood_type'].value=d.blood_type||''; f.elements['public_allergies'].value=(d.public_allergies||[]).join('\n'); f.elements['public_conditions'].value=(d.public_conditions||[]).join('\n'); f.elements['emergency_contact_name'].value=d.emergency_contact_name||''; f.elements['emergency_contact_phone'].value=d.emergency_contact_phone||''; f.elements['emergency_instructions'].value=d.emergency_instructions||''; f.elements['doctor_name'].value=d.private_data?.doctor_name||''; f.elements['doctor_rpps'].value=d.private_data?.doctor_rpps||''; f.elements['treatments'].value=(d.private_data?.treatments||[]).map(x=>x.name||'').join('\n'); f.elements['antecedents'].value=(d.private_data?.antecedents||[]).join('\n'); f.elements['vaccinations'].value=(d.private_data?.vaccinations||[]).map(x=>x.name||'').join('\n'); f.elements['ordonnances'].value=(d.private_data?.ordonnances||[]).map(x=>x.title||'').join('\n'); f.elements['imc'].value=d.private_data?.imc||''; f.elements['blood_pressure'].value=d.private_data?.blood_pressure||''; f.elements['notes'].value=d.private_data?.notes||''; }catch(err){ flash(box,err.message+' — ouvre /doctor-pin.html pour valider ton PIN.','error'); } }
-  f?.addEventListener('submit', async e=>{ e.preventDefault(); const p={ blood_type:f.elements['blood_type'].value.trim(), public_allergies:parseList(f.elements['public_allergies'].value), public_conditions:parseList(f.elements['public_conditions'].value), emergency_contact_name:f.elements['emergency_contact_name'].value.trim(), emergency_contact_phone:f.elements['emergency_contact_phone'].value.trim(), emergency_instructions:f.elements['emergency_instructions'].value.trim(), private_data:{ doctor_name:f.elements['doctor_name'].value.trim(), doctor_rpps:f.elements['doctor_rpps'].value.trim(), treatments:parseList(f.elements['treatments'].value).map(v=>({name:v})), antecedents:parseList(f.elements['antecedents'].value), vaccinations:parseList(f.elements['vaccinations'].value).map(v=>({name:v})), ordonnances:parseList(f.elements['ordonnances'].value).map(v=>({title:v})), imc:f.elements['imc'].value.trim(), blood_pressure:f.elements['blood_pressure'].value.trim(), notes:f.elements['notes'].value.trim() } }; try{ await api(`/patients/${id}`,{method:'PUT',headers:jsonHeaders(),body:JSON.stringify(p)}); flash(box,'Dossier patient mis à jour.','success'); load(); }catch(err){ flash(box,err.message,'error'); } });
-  qs('#archive-patient')?.addEventListener('click', async()=>{ if(!confirm('Archiver ce patient ?')) return; try{ await api(`/patients/${id}`,{method:'DELETE',headers:jsonHeaders()}); flash(box,'Patient archivé.','success'); load(); }catch(err){ flash(box,err.message,'error'); } });
-  load(); }
+async function initDoctorPatient(){
+  const user = protect('doctor'); if(!user) return;
+  mountGlobalNav('doctorPatient', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const box = qs('#doctor-patient-message');
+  const form = qs('#doctor-patient-update-form');
+  const id = new URLSearchParams(location.search).get('id');
+  if(!id){ showInlineMessage(box, 'Patient introuvable.', 'error'); return; }
+  let currentCases = [];
+  async function load(){
+    try {
+      const d = await api(`/patients/${id}`);
+      qs('#patient-title').textContent = `${d.first_name} ${d.last_name}`;
+      qs('#patient-subtitle').textContent = `${d.email}${d.phone_number ? ' • ' + d.phone_number : ''}`;
+      qs('#dp-blood').textContent = d.blood_type || '—';
+      qs('#dp-contact').textContent = d.emergency_contact_name ? `${d.emergency_contact_name} — ${d.emergency_contact_phone}` : 'Non renseigné';
+      qs('#dp-allergies').innerHTML = renderBadges(d.public_allergies);
+      qs('#dp-conditions').innerHTML = renderBadges(d.public_conditions);
+      qs('#dp-notes').textContent = d.private_data?.notes || 'Aucune note.';
+      currentCases = d.private_data?.cases || [];
+      renderCases(currentCases);
+      form.elements['blood_type'].value = d.blood_type || '';
+      form.elements['emergency_contact_name'].value = d.emergency_contact_name || '';
+      form.elements['emergency_contact_phone'].value = d.emergency_contact_phone || '';
+      form.elements['public_allergies'].value = (d.public_allergies || []).join('\n');
+      form.elements['public_conditions'].value = (d.public_conditions || []).join('\n');
+      form.elements['emergency_instructions'].value = d.emergency_instructions || '';
+      form.elements['doctor_name'].value = d.private_data?.doctor_name || '';
+      form.elements['doctor_rpps'].value = d.private_data?.doctor_rpps || '';
+      form.elements['notes'].value = d.private_data?.notes || '';
+    } catch(err){ showInlineMessage(box, `${err.message} — validez votre PIN.`, 'error'); }
+  }
+  function renderCases(items){
+    const el = qs('#doctor-cases-list');
+    if(!el) return;
+    el.innerHTML = items.length ? items.map((item, idx) => `
+      <div class="app-card"><div class="split"><div><h4>${escapeHtml(item.title)}</h4><p class="muted">${escapeHtml(item.content)}</p></div>
+      <button class="btn btn-secondary" data-delete-case="${idx}">Supprimer</button></div></div>`).join('') : '<div class="app-card"><p class="muted">Aucun cas ajouté.</p></div>';
+    qsa('[data-delete-case]').forEach(btn => btn.addEventListener('click', () => { currentCases.splice(Number(btn.dataset.deleteCase), 1); renderCases(currentCases); }));
+  }
+  qs('#add-case-btn')?.addEventListener('click', () => {
+    const title = qs('#case_title')?.value.trim();
+    const content = qs('#case_content')?.value.trim();
+    if(!title || !content){ showInlineMessage(box, 'Ajoutez un titre et un contenu pour le cas.', 'error'); return; }
+    currentCases.push({ title, content });
+    qs('#case_title').value = '';
+    qs('#case_content').value = '';
+    renderCases(currentCases);
+  });
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api(`/patients/${id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blood_type: form.elements['blood_type'].value.trim(),
+          emergency_contact_name: form.elements['emergency_contact_name'].value.trim(),
+          emergency_contact_phone: form.elements['emergency_contact_phone'].value.trim(),
+          public_allergies: parseList(form.elements['public_allergies'].value),
+          public_conditions: parseList(form.elements['public_conditions'].value),
+          emergency_instructions: form.elements['emergency_instructions'].value.trim(),
+          private_data: {
+            doctor_name: form.elements['doctor_name'].value.trim(),
+            doctor_rpps: form.elements['doctor_rpps'].value.trim(),
+            notes: form.elements['notes'].value.trim(),
+            cases: currentCases,
+          }
+        })
+      });
+      success(box, 'Dossier patient mis à jour avec succès.');
+      load();
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+  qs('#archive-patient')?.addEventListener('click', async () => {
+    if(!confirm('Archiver ce patient ?')) return;
+    try { await api(`/patients/${id}`, { method: 'DELETE' }); showActionModal('Patient archivé avec succès.'); location.href = '/doctor.html'; }
+    catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+  load();
+}
 
-async function initScanner(){ const f=qs('#scanner-form'), box=qs('#scanner-message'); f?.addEventListener('submit', async e=>{ e.preventDefault(); const token=f.elements['token'].value.trim(); try{ const c=await api(`/qrcode/verify/${encodeURIComponent(token)}`); if(!c.valid) throw new Error('Token invalide.'); location.href=`/emergency.html?token=${encodeURIComponent(token)}`; }catch(err){ flash(box,err.message,'error'); } }); }
+async function initScanner(){
+  const user = getUser();
+  mountGlobalNav('scanner', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const form = qs('#scanner-form');
+  const box = qs('#scanner-message');
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const token = form.elements['token'].value.trim();
+      const d = await api(`/qrcode/verify/${encodeURIComponent(token)}`);
+      if(!d.valid) throw new Error('Token invalide.');
+      location.href = `/secours/${encodeURIComponent(token)}`;
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+}
 
-async function initEmergency(){ const params=new URLSearchParams(location.search); const token=params.get('token'); const f=qs('#emergency-search-form'), box=qs('#emergency-message'); f?.addEventListener('submit', e=>{ e.preventDefault(); const t=f.elements['token'].value.trim(); location.href=`/emergency.html?token=${encodeURIComponent(t)}`; }); if(!token) return; try{ const d=await api(`/dossier/public/${encodeURIComponent(token)}`); qs('#emergency-name').textContent=`${d.first_name} ${d.last_name}`; qs('#emergency-blood').textContent=d.blood_type||'—'; qs('#emergency-id').textContent=d.medpass_id||'—'; qs('#emergency-contact').textContent=d.emergency_contact_name?`${d.emergency_contact_name} — ${d.emergency_contact_phone}`:'Non renseigné'; qs('#emergency-allergies').innerHTML=renderBadges(d.public_allergies); qs('#emergency-conditions').innerHTML=renderBadges(d.public_conditions); qs('#emergency-instructions').textContent=d.emergency_instructions||'Aucune consigne spécifique.'; }catch(err){ flash(box,err.message,'error'); } }
+async function initEmergency(){
+  const user = getUser();
+  mountGlobalNav('emergency', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token');
+  const box = qs('#emergency-message');
+  qs('#emergency-search-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const t = e.currentTarget.elements['token'].value.trim();
+    location.href = `/secours/${encodeURIComponent(t)}`;
+  });
+  if(!token) return;
+  try {
+    const d = await api(`/dossier/public/${encodeURIComponent(token)}`);
+    qs('#emergency-name').textContent = `${d.first_name} ${d.last_name}`;
+    qs('#emergency-blood').textContent = d.blood_type || '—';
+    qs('#emergency-id').textContent = d.medpass_id || '—';
+    qs('#emergency-contact').textContent = d.emergency_contact_name ? `${d.emergency_contact_name} — ${d.emergency_contact_phone}` : 'Non renseigné';
+    qs('#emergency-allergies').innerHTML = renderBadges(d.public_allergies);
+    qs('#emergency-conditions').innerHTML = renderBadges(d.public_conditions);
+    qs('#emergency-instructions').textContent = d.emergency_instructions || 'Aucune consigne spécifique.';
+  } catch(err){ showInlineMessage(box, err.message, 'error'); }
+}
 
-document.addEventListener('DOMContentLoaded', ()=>{ hardenCredentialForms(document); const page=document.body.dataset.page; ({login:initLogin,client:initClient,patientProfile:initPatientProfile,patientQr:initPatientQr,doctor:initDoctor,doctorForm:initDoctorForm,doctorPin:initDoctorPin,doctorPatient:initDoctorPatient,scanner:initScanner,emergency:initEmergency}[page]||(()=>{}))(); });
+document.addEventListener('DOMContentLoaded', async () => {
+  ensureActionModal();
+  const page = document.body.dataset.page;
+  const initMap = {
+    login: initLogin,
+    signup: initSignup,
+    onboarding: initOnboarding,
+    client: initClient,
+    patientProfile: initPatientProfile,
+    patientQr: initPatientQr,
+    doctor: initDoctor,
+    doctorForm: initDoctorForm,
+    doctorPin: initDoctorPin,
+    doctorPatient: initDoctorPatient,
+    scanner: initScanner,
+    emergency: initEmergency,
+  };
+  if(initMap[page]) await initMap[page]();
+});

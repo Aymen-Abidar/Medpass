@@ -24,3 +24,11 @@ JWT_SECRET = os.getenv('MEDPASS_JWT_SECRET', 'change-this-jwt-secret-in-producti
 ENCRYPTION_KEY = os.getenv('MEDPASS_ENCRYPTION_KEY', '0123456789abcdef0123456789abcdef')
 APP_NAME = 'MedPass'
 ACCESS_TOKEN_HOURS = int(os.getenv('MEDPASS_ACCESS_TOKEN_HOURS', '8'))
+
+SMTP_HOST = os.getenv('MEDPASS_SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT = int(os.getenv('MEDPASS_SMTP_PORT', '587'))
+SMTP_USER = os.getenv('MEDPASS_SMTP_USER', '').strip()
+SMTP_PASSWORD = os.getenv('MEDPASS_SMTP_PASSWORD', '').strip()
+SMTP_FROM = os.getenv('MEDPASS_SMTP_FROM', SMTP_USER).strip()
+EMAIL_CODE_EXPIRY_MINUTES = int(os.getenv('MEDPASS_EMAIL_CODE_EXPIRY_MINUTES', '10'))
+DOCTOR_PIN_RECHECK_MINUTES = int(os.getenv('MEDPASS_DOCTOR_PIN_RECHECK_MINUTES', '60'))

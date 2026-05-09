@@ -10,6 +10,8 @@ class RegisterPayload(BaseModel):
     last_name: str
     birth_date: Optional[str] = None
     doctor_pin: Optional[str] = None
+    phone_number: Optional[str] = None
+    verification_code: Optional[str] = None
 
 
 class LoginPayload(BaseModel):
@@ -17,8 +19,26 @@ class LoginPayload(BaseModel):
     password: str
 
 
+class EmailCodePayload(BaseModel):
+    email: EmailStr
+    purpose: str = 'signup'
+
+
+class CompleteOnboardingPayload(BaseModel):
+    email: EmailStr
+    verification_code: str = Field(min_length=4, max_length=8)
+    new_password: str = Field(min_length=8)
+    phone_number: str = Field(min_length=6)
+
+
 class DoctorPinPayload(BaseModel):
     pin: str = Field(min_length=4, max_length=4)
+
+
+class AppointmentPayload(BaseModel):
+    date: str
+    time: Optional[str] = ''
+    title: str = Field(min_length=1)
 
 
 class DossierUpdatePayload(BaseModel):
@@ -37,6 +57,7 @@ class CreatePatientPayload(BaseModel):
     first_name: str
     last_name: str
     birth_date: Optional[str] = None
+    phone_number: Optional[str] = None
     blood_type: Optional[str] = None
     public_allergies: List[str] = []
     public_conditions: List[str] = []

@@ -1,31 +1,44 @@
 import base64
 import json
 import secrets
+import smtplib
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from html import escape
 from io import BytesIO
 from pathlib import Path
-from html import escape
 from typing import Any, Dict, Optional
 
 import qrcode
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import APP_NAME
+from .config import (
+    APP_NAME,
+    DOCTOR_PIN_RECHECK_MINUTES,
+    EMAIL_CODE_EXPIRY_MINUTES,
+    SMTP_FROM,
+    SMTP_HOST,
+    SMTP_PASSWORD,
+    SMTP_PORT,
+    SMTP_USER,
+)
 from .db import create_default_private_data, execute, get_conn, init_db, insert_user, utcnow
 from .schemas import (
-    ArrayItemPayload,
+    AppointmentPayload,
+    CompleteOnboardingPayload,
     CreatePatientPayload,
     DoctorPinPayload,
     DossierUpdatePayload,
+    EmailCodePayload,
     LoginPayload,
     RegisterPayload,
 )
 from .security import create_token, decode_token, decrypt_text, encrypt_text, hash_secret, verify_secret
 
 app = FastAPI(title=APP_NAME)
-
 init_db()
 
 app.add_middleware(
@@ -51,26 +64,50 @@ def get_site_origin(request: Request) -> str:
     return f"{proto}://{host}".rstrip('/')
 
 
-def get_public_patient_payload(token: str, request: Request):
-    with get_conn() as conn:
-        qr = execute(conn, 'SELECT * FROM qrcodes WHERE token = ? AND is_active = 1', (token,)).fetchone()
-        if not qr:
-            raise HTTPException(status_code=404, detail='QR Code invalide ou révoqué.')
-        user = execute(conn, "SELECT * FROM users WHERE id = ? AND role = 'patient'", (qr['patient_id'],)).fetchone()
-        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (qr['patient_id'],)).fetchone()
-        if not user or not dossier or dossier.get('is_archived'):
-            raise HTTPException(status_code=404, detail='Patient introuvable.')
-    log_access(user['id'], None, 'secours', 'public', request.client.host if request.client else None)
-    data = serialize_dossier(user, dossier, include_private=False)
-    data['medpass_id'] = f"PMU-{user['id']:05d}"
-    return data
-
-
 def json_loads_safe(value: str, fallback: Any):
     try:
         return json.loads(value or '')
     except Exception:
         return fallback
+
+
+def now_dt() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def parse_dt(value: Optional[str]) -> datetime:
+    if not value:
+        return now_dt() - timedelta(days=1)
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return now_dt() - timedelta(days=1)
+
+
+def send_email_code_message(email: str, code: str, purpose: str) -> Dict[str, Any]:
+    subject = 'Code de vérification MedPass'
+    reason = 'finaliser votre inscription' if purpose == 'signup' else 'confirmer votre adresse e-mail'
+    html = f"""
+    <div style='font-family:Arial,sans-serif;padding:24px;color:#10213a'>
+      <h2 style='margin:0 0 12px'>MedPass</h2>
+      <p>Utilisez ce code pour {reason} :</p>
+      <div style='font-size:32px;font-weight:700;letter-spacing:6px;margin:18px 0'>{escape(code)}</div>
+      <p>Ce code expire dans {EMAIL_CODE_EXPIRY_MINUTES} minutes.</p>
+    </div>
+    """
+    if not (SMTP_USER and SMTP_PASSWORD and SMTP_FROM):
+        return {'sent': False, 'dev_code': code}
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = SMTP_FROM
+    msg['To'] = email
+    msg.set_content(f'MedPass verification code: {code}')
+    msg.add_alternative(html, subtype='html')
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+    return {'sent': True}
 
 
 def get_current_user(authorization: Optional[str] = Header(default=None)):
@@ -105,16 +142,27 @@ def require_doctor_pin(user: Dict[str, Any], x_doctor_pin: Optional[str]):
         raise HTTPException(status_code=403, detail='PIN médecin invalide.')
 
 
+def log_access(patient_id: int, accessed_by: Optional[int], access_role: str, access_level: str, ip_address: Optional[str]):
+    with get_conn() as conn:
+        execute(conn,
+            'INSERT INTO access_logs (patient_id, accessed_by, access_role, access_level, ip_address, created_at) VALUES (?,?,?,?,?,?)',
+            (patient_id, accessed_by, access_role, access_level, ip_address, utcnow()),
+        )
+
+
 def serialize_dossier(user: Dict[str, Any], dossier: Dict[str, Any], *, include_private: bool):
     payload = {
         'patient_id': user['id'],
         'email': user['email'],
+        'email_verified': bool(user.get('email_verified')),
+        'phone_number': user.get('phone_number') or '',
         'first_name': user['first_name'],
         'last_name': user['last_name'],
         'birth_date': user['birth_date'],
         'blood_type': dossier.get('blood_type') or '',
         'public_allergies': json_loads_safe(dossier.get('public_allergies_json'), []),
         'public_conditions': json_loads_safe(dossier.get('public_conditions_json'), []),
+        'appointments': json_loads_safe(dossier.get('appointments_json'), []),
         'emergency_contact_name': dossier.get('emergency_contact_name') or '',
         'emergency_contact_phone': dossier.get('emergency_contact_phone') or '',
         'emergency_instructions': dossier.get('emergency_instructions') or '',
@@ -126,18 +174,38 @@ def serialize_dossier(user: Dict[str, Any], dossier: Dict[str, Any], *, include_
     return payload
 
 
-def log_access(patient_id: int, accessed_by: Optional[int], access_role: str, access_level: str, ip_address: Optional[str]):
+def get_public_patient_payload(token: str, request: Request):
     with get_conn() as conn:
-        execute(
-            conn,
-            'INSERT INTO access_logs (patient_id, accessed_by, access_role, access_level, ip_address, created_at) VALUES (?,?,?,?,?,?)',
-            (patient_id, accessed_by, access_role, access_level, ip_address, utcnow()),
-        )
+        qr = execute(conn, 'SELECT * FROM qrcodes WHERE token = ? AND is_active = 1', (token,)).fetchone()
+        if not qr:
+            raise HTTPException(status_code=404, detail='QR Code invalide ou révoqué.')
+        user = execute(conn, "SELECT * FROM users WHERE id = ? AND role = 'patient'", (qr['patient_id'],)).fetchone()
+        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (qr['patient_id'],)).fetchone()
+        if not user or not dossier or dossier.get('is_archived'):
+            raise HTTPException(status_code=404, detail='Patient introuvable.')
+    log_access(user['id'], None, 'secours', 'public', request.client.host if request.client else None)
+    data = serialize_dossier(user, dossier, include_private=False)
+    data['medpass_id'] = f"PMU-{user['id']:05d}"
+    return data
 
 
-@app.on_event('startup')
-def startup_event():
-    init_db()
+def ensure_public_required(payload: DossierUpdatePayload):
+    if not (payload.blood_type or '').strip():
+        raise HTTPException(status_code=400, detail='Le groupe sanguin est obligatoire.')
+    if not (payload.emergency_contact_name or '').strip():
+        raise HTTPException(status_code=400, detail='Le contact d’urgence est obligatoire.')
+    if not (payload.emergency_contact_phone or '').strip():
+        raise HTTPException(status_code=400, detail='Le numéro d’urgence est obligatoire.')
+
+
+def verify_email_code(conn, email: str, code: str, purpose: str):
+    row = execute(conn,
+        'SELECT * FROM email_verifications WHERE email = ? AND purpose = ? AND is_used = 0 ORDER BY id DESC LIMIT 1',
+        (email.lower(), purpose),
+    ).fetchone()
+    if not row or parse_dt(row['expires_at']) < now_dt() or not verify_secret(code, row['code_hash']):
+        raise HTTPException(status_code=400, detail='Code de vérification invalide ou expiré.')
+    execute(conn, 'UPDATE email_verifications SET is_used = 1 WHERE id = ?', (row['id'],))
 
 
 @app.get('/health')
@@ -145,19 +213,36 @@ def health():
     return {'ok': True, 'app': APP_NAME}
 
 
-@app.post('/api/auth/register')
-def register(payload: RegisterPayload):
+@app.post('/api/auth/send-email-code')
+def send_email_code(payload: EmailCodePayload):
+    code = ''.join(secrets.choice('0123456789') for _ in range(6))
+    now = now_dt()
+    expires = now + timedelta(minutes=EMAIL_CODE_EXPIRY_MINUTES)
+    with get_conn() as conn:
+        execute(conn, 'INSERT INTO email_verifications (email, code_hash, purpose, created_at, expires_at, is_used) VALUES (?,?,?,?,?,0)',
+                (payload.email.lower(), hash_secret(code), payload.purpose, now.isoformat(), expires.isoformat()))
+    result = send_email_code_message(payload.email.lower(), code, payload.purpose)
+    return {'ok': True, **result}
+
+
+@app.post('/api/auth/register-verified')
+def register_verified(payload: RegisterPayload):
     role = payload.role.lower().strip()
     if role not in {'patient', 'doctor'}:
         raise HTTPException(status_code=400, detail='Rôle invalide.')
     if role == 'doctor' and (not payload.doctor_pin or len(payload.doctor_pin) != 4 or not payload.doctor_pin.isdigit()):
         raise HTTPException(status_code=400, detail='Le médecin doit définir un PIN à 4 chiffres.')
+    if role == 'patient' and not (payload.phone_number or '').strip():
+        raise HTTPException(status_code=400, detail='Le numéro de téléphone est obligatoire.')
+    if not payload.verification_code:
+        raise HTTPException(status_code=400, detail='Le code de vérification e-mail est obligatoire.')
 
     with get_conn() as conn:
         existing = execute(conn, 'SELECT id FROM users WHERE email = ?', (payload.email.lower(),)).fetchone()
         if existing:
             raise HTTPException(status_code=400, detail='Cet e-mail existe déjà.')
-
+        verify_email_code(conn, payload.email.lower(), payload.verification_code, 'signup')
+        now = utcnow()
         user_id = insert_user(
             conn,
             email=payload.email.lower(),
@@ -167,25 +252,23 @@ def register(payload: RegisterPayload):
             last_name=payload.last_name.strip(),
             birth_date=payload.birth_date,
             doctor_pin_hash=hash_secret(payload.doctor_pin) if payload.doctor_pin else None,
-            created_at=utcnow(),
+            phone_number=(payload.phone_number or '').strip(),
+            email_verified=1,
+            created_at=now,
         )
         if role == 'patient':
-            execute(conn,
-                """
+            execute(conn, """
                 INSERT INTO dossiers (
                     patient_id, blood_type, public_allergies_json, public_conditions_json,
                     emergency_contact_name, emergency_contact_phone, emergency_instructions,
-                    private_data_enc, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?)
-                """,
-                (user_id, '', '[]', '[]', '', '', '', encrypt_text(json.dumps(create_default_private_data())), utcnow(), utcnow()),
-            )
+                    appointments_json, private_data_enc, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (user_id, '', '[]', '[]', '', '', '', '[]', encrypt_text(json.dumps(create_default_private_data())), now, now))
             token = secrets.token_urlsafe(24)
-            execute(conn,'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (user_id, token, utcnow()))
-
+            execute(conn, 'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (user_id, token, now))
         user = execute(conn, 'SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
     token = create_token({'id': user['id'], 'role': user['role'], 'email': user['email']})
-    return {'token': token, 'user': {'id': user['id'], 'role': user['role'], 'email': user['email'], 'first_name': user['first_name'], 'last_name': user['last_name']}}
+    return {'token': token, 'user': {'id': user['id'], 'role': user['role'], 'email': user['email'], 'first_name': user['first_name'], 'last_name': user['last_name'], 'must_complete_onboarding': False}}
 
 
 @app.post('/api/auth/login')
@@ -195,18 +278,43 @@ def login(payload: LoginPayload):
         if not user or not verify_secret(payload.password, user['password_hash']):
             raise HTTPException(status_code=401, detail='E-mail ou mot de passe incorrect.')
     token = create_token({'id': user['id'], 'role': user['role'], 'email': user['email']})
-    return {'token': token, 'user': {'id': user['id'], 'role': user['role'], 'email': user['email'], 'first_name': user['first_name'], 'last_name': user['last_name']}}
+    return {'token': token, 'user': {'id': user['id'], 'role': user['role'], 'email': user['email'], 'first_name': user['first_name'], 'last_name': user['last_name'], 'must_complete_onboarding': bool(user.get('must_complete_onboarding')), 'email_verified': bool(user.get('email_verified'))}}
+
+
+@app.post('/api/auth/complete-onboarding')
+def complete_onboarding(payload: CompleteOnboardingPayload):
+    with get_conn() as conn:
+        user = execute(conn, "SELECT * FROM users WHERE email = ? AND role = 'patient'", (payload.email.lower(),)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail='Compte patient introuvable.')
+        verify_email_code(conn, payload.email.lower(), payload.verification_code, 'onboarding')
+        execute(conn, 'UPDATE users SET password_hash = ?, phone_number = ?, email_verified = 1, must_complete_onboarding = 0 WHERE id = ?',
+                (hash_secret(payload.new_password), payload.phone_number.strip(), user['id']))
+        user = execute(conn, 'SELECT * FROM users WHERE id = ?', (user['id'],)).fetchone()
+    token = create_token({'id': user['id'], 'role': user['role'], 'email': user['email']})
+    return {'token': token, 'user': {'id': user['id'], 'role': user['role'], 'email': user['email'], 'first_name': user['first_name'], 'last_name': user['last_name'], 'must_complete_onboarding': False}}
 
 
 @app.get('/api/auth/me')
 def me(user=Depends(get_current_user)):
-    return {'id': user['id'], 'role': user['role'], 'email': user['email'], 'first_name': user['first_name'], 'last_name': user['last_name'], 'birth_date': user['birth_date']}
+    return {
+        'id': user['id'],
+        'role': user['role'],
+        'email': user['email'],
+        'first_name': user['first_name'],
+        'last_name': user['last_name'],
+        'birth_date': user['birth_date'],
+        'phone_number': user.get('phone_number') or '',
+        'email_verified': bool(user.get('email_verified')),
+        'must_complete_onboarding': bool(user.get('must_complete_onboarding')),
+        'doctor_pin_recheck_minutes': DOCTOR_PIN_RECHECK_MINUTES,
+    }
 
 
 @app.post('/api/doctor/verify-pin')
 def verify_doctor_pin(payload: DoctorPinPayload, user=Depends(require_role('doctor'))):
     require_doctor_pin(user, payload.pin)
-    return {'ok': True}
+    return {'ok': True, 'valid_for_minutes': DOCTOR_PIN_RECHECK_MINUTES}
 
 
 @app.get('/api/dossier/mon-dossier')
@@ -215,55 +323,70 @@ def get_my_dossier(user=Depends(require_role('patient'))):
         dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (user['id'],)).fetchone()
         if not dossier:
             raise HTTPException(status_code=404, detail='Dossier introuvable.')
-    return serialize_dossier(user, dossier, include_private=True)
+        link = execute(conn, 'SELECT doctor_id FROM doctor_patients WHERE patient_id = ?', (user['id'],)).fetchone()
+    payload = serialize_dossier(user, dossier, include_private=False)
+    payload['linked_to_doctor'] = bool(link)
+    return payload
 
 
 @app.put('/api/dossier/mon-dossier')
 def update_my_dossier(payload: DossierUpdatePayload, user=Depends(require_role('patient'))):
+    ensure_public_required(payload)
     with get_conn() as conn:
         dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (user['id'],)).fetchone()
         if not dossier:
             raise HTTPException(status_code=404, detail='Dossier introuvable.')
-        private_data = json_loads_safe(decrypt_text(dossier['private_data_enc']), create_default_private_data())
-        if payload.private_data is not None:
-            private_data.update(payload.private_data)
-        execute(conn,
-            """
+        execute(conn, """
             UPDATE dossiers SET blood_type = ?, public_allergies_json = ?, public_conditions_json = ?,
-            emergency_contact_name = ?, emergency_contact_phone = ?, emergency_instructions = ?,
-            private_data_enc = ?, updated_at = ? WHERE patient_id = ?
-            """,
-            (
-                payload.blood_type if payload.blood_type is not None else dossier['blood_type'],
-                json.dumps(payload.public_allergies if payload.public_allergies is not None else json_loads_safe(dossier['public_allergies_json'], []), ensure_ascii=False),
-                json.dumps(payload.public_conditions if payload.public_conditions is not None else json_loads_safe(dossier['public_conditions_json'], []), ensure_ascii=False),
-                payload.emergency_contact_name if payload.emergency_contact_name is not None else dossier['emergency_contact_name'],
-                payload.emergency_contact_phone if payload.emergency_contact_phone is not None else dossier['emergency_contact_phone'],
-                payload.emergency_instructions if payload.emergency_instructions is not None else dossier['emergency_instructions'],
-                encrypt_text(json.dumps(private_data, ensure_ascii=False)),
-                utcnow(),
-                user['id'],
-            ),
-        )
-        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (user['id'],)).fetchone()
-    return serialize_dossier(user, dossier, include_private=True)
-
-
-@app.get('/api/dossier/logs')
-def get_logs(user=Depends(require_role('patient'))):
-    with get_conn() as conn:
-        logs = execute(conn,
-            """
-            SELECT access_logs.*, users.first_name, users.last_name
-            FROM access_logs
-            LEFT JOIN users ON users.id = access_logs.accessed_by
+            emergency_contact_name = ?, emergency_contact_phone = ?, emergency_instructions = ?, updated_at = ?
             WHERE patient_id = ?
-            ORDER BY created_at DESC
-            LIMIT 50
-            """,
-            (user['id'],),
-        ).fetchall()
-    return {'items': logs}
+        """, (
+            (payload.blood_type or '').strip(),
+            json.dumps(payload.public_allergies or [], ensure_ascii=False),
+            json.dumps(payload.public_conditions or [], ensure_ascii=False),
+            (payload.emergency_contact_name or '').strip(),
+            (payload.emergency_contact_phone or '').strip(),
+            (payload.emergency_instructions or '').strip(),
+            utcnow(),
+            user['id'],
+        ))
+        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (user['id'],)).fetchone()
+    return serialize_dossier(user, dossier, include_private=False)
+
+
+@app.get('/api/patient/appointments')
+def patient_appointments(user=Depends(require_role('patient'))):
+    with get_conn() as conn:
+        dossier = execute(conn, 'SELECT appointments_json FROM dossiers WHERE patient_id = ?', (user['id'],)).fetchone()
+        items = json_loads_safe(dossier.get('appointments_json') if dossier else '[]', [])
+    return {'items': items}
+
+
+@app.post('/api/patient/appointments')
+def add_appointment(payload: AppointmentPayload, user=Depends(require_role('patient'))):
+    with get_conn() as conn:
+        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (user['id'],)).fetchone()
+        if not dossier:
+            raise HTTPException(status_code=404, detail='Dossier introuvable.')
+        items = json_loads_safe(dossier.get('appointments_json'), [])
+        items.append({'date': payload.date, 'time': payload.time or '', 'title': payload.title})
+        items.sort(key=lambda x: f"{x.get('date','')} {x.get('time','')}")
+        execute(conn, 'UPDATE dossiers SET appointments_json = ?, updated_at = ? WHERE patient_id = ?',
+                (json.dumps(items, ensure_ascii=False), utcnow(), user['id']))
+    return {'items': items}
+
+
+@app.delete('/api/patient/appointments/{index}')
+def delete_appointment(index: int, user=Depends(require_role('patient'))):
+    with get_conn() as conn:
+        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (user['id'],)).fetchone()
+        items = json_loads_safe(dossier.get('appointments_json') if dossier else '[]', [])
+        if index < 0 or index >= len(items):
+            raise HTTPException(status_code=404, detail='Rendez-vous introuvable.')
+        items.pop(index)
+        execute(conn, 'UPDATE dossiers SET appointments_json = ?, updated_at = ? WHERE patient_id = ?',
+                (json.dumps(items, ensure_ascii=False), utcnow(), user['id']))
+    return {'items': items}
 
 
 @app.get('/api/qrcode/generate')
@@ -272,7 +395,7 @@ def generate_qrcode(request: Request, user=Depends(require_role('patient'))):
         row = execute(conn, 'SELECT * FROM qrcodes WHERE patient_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', (user['id'],)).fetchone()
         if not row:
             token = secrets.token_urlsafe(24)
-            execute(conn,'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (user['id'], token, utcnow()))
+            execute(conn, 'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (user['id'], token, utcnow()))
             row = execute(conn, 'SELECT * FROM qrcodes WHERE patient_id = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', (user['id'],)).fetchone()
     public_url = get_site_origin(request) + f'/secours/{row["token"]}'
     img = qrcode.make(public_url)
@@ -295,99 +418,7 @@ def regenerate_qrcode(user=Depends(require_role('patient'))):
 def verify_qr(token: str):
     with get_conn() as conn:
         row = execute(conn, 'SELECT * FROM qrcodes WHERE token = ? AND is_active = 1', (token,)).fetchone()
-        return {'valid': bool(row), 'patient_id': row['patient_id'] if row else None}
-
-
-@app.get('/secours/{token}', response_class=HTMLResponse)
-def secours_page(token: str, request: Request):
-    data = get_public_patient_payload(token, request)
-
-    def chips(items):
-        values = items or []
-        if not values:
-            return '<span class="array-item">Aucune</span>'
-        return ''.join(f'<span class="array-item">{escape(str(item))}</span>' for item in values)
-
-    name = escape(f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or 'Patient')
-    blood = escape(data.get('blood_type') or '—')
-    medpass_id = escape(data.get('medpass_id') or '—')
-    contact_name = escape(data.get('emergency_contact_name') or 'Non renseigné')
-    contact_phone_raw = data.get('emergency_contact_phone') or ''
-    contact_phone = escape(contact_phone_raw or 'Non renseigné')
-    instructions = escape(data.get('emergency_instructions') or 'Aucune consigne spécifique.')
-    phone_link = f'<a class="btn btn-primary btn-full" href="tel:{escape(contact_phone_raw)}">Appeler le contact d&apos;urgence</a>' if contact_phone_raw else ""
-
-    html = f"""<!DOCTYPE html>
-<html lang=\"fr\">
-<head>
-  <meta charset=\"UTF-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
-  <title>MedPass — Vue secours</title>
-  <link rel=\"stylesheet\" href=\"/styles.css\" />
-</head>
-<body>
-  <div class=\"app-bg\"></div>
-  <main class=\"shell shell-site shell-full\">
-    <section class=\"phone-frame wide-frame site-frame site-frame-full\">
-      <header class=\"topbar topbar-site landing-topbar\">
-        <div>
-          <p class=\"eyebrow\">Passeport médical d'urgence</p>
-          <h1>MedPass</h1>
-          <p class=\"muted site-subtitle\">Vue secours directe du patient.</p>
-        </div>
-        <div class=\"topbar-pill blue\">Accès d'urgence</div>
-      </header>
-
-      <section class=\"hero-card hero-site hero-site-full\">
-        <div class=\"hero-copy\">
-          <span class=\"badge red\">Informations vitales</span>
-          <h2>{name}</h2>
-          <p class=\"muted site-description\">Accédez immédiatement aux données essentielles du patient en cas d'urgence.</p>
-          <div class=\"feature-points feature-points-simple\">
-            <div class=\"mini-feature\">
-              <strong>Groupe sanguin</strong>
-              <span>{blood}</span>
-            </div>
-            <div class=\"mini-feature\">
-              <strong>Identifiant MedPass</strong>
-              <span>{medpass_id}</span>
-            </div>
-            <div class=\"mini-feature\">
-              <strong>Contact d'urgence</strong>
-              <span>{contact_name}<br>{contact_phone}</span>
-            </div>
-          </div>
-          <div class=\"hero-actions\" style=\"margin-top:18px;\">
-            {phone_link}
-          </div>
-        </div>
-
-        <div class=\"hero-visual app-card hero-visual-large\">
-          <div class=\"visual-badge-row\">
-            <span class=\"status-pill danger\">Urgence</span>
-            <span class=\"status-pill\">Secours</span>
-          </div>
-          <div class=\"visual-panel\" style=\"justify-items:stretch; text-align:left;\">
-            <div class=\"app-card\" style=\"padding:16px;\">
-              <h3>Allergies</h3>
-              <div class=\"array-list\">{chips(data.get('public_allergies'))}</div>
-            </div>
-            <div class=\"app-card\" style=\"padding:16px;\">
-              <h3>Pathologies d'urgence</h3>
-              <div class=\"array-list\">{chips(data.get('public_conditions'))}</div>
-            </div>
-            <div class=\"app-card\" style=\"padding:16px;\">
-              <h3>Consignes</h3>
-              <p class=\"muted\" style=\"margin-bottom:0;\">{instructions}</p>
-            </div>
-          </div>
-        </div>
-      </section>
-    </section>
-  </main>
-</body>
-</html>"""
-    return HTMLResponse(content=html)
+    return {'valid': bool(row), 'patient_id': row['patient_id'] if row else None}
 
 
 @app.get('/api/dossier/public/{token}')
@@ -395,21 +426,40 @@ def public_dossier(token: str, request: Request):
     return get_public_patient_payload(token, request)
 
 
+@app.get('/secours/{token}', response_class=HTMLResponse)
+def secours_page(token: str, request: Request):
+    data = get_public_patient_payload(token, request)
+    def chips(items):
+        values = items or []
+        if not values:
+            return '<span class="array-item">Aucune</span>'
+        return ''.join(f'<span class="array-item">{escape(str(item))}</span>' for item in values)
+    phone_raw = data.get('emergency_contact_phone') or ''
+    phone_btn = f'<a class="btn btn-primary btn-full" href="tel:{escape(phone_raw)}">Appeler le contact d’urgence</a>' if phone_raw else ''
+    html = f"""<!DOCTYPE html><html lang='fr'><head><meta charset='UTF-8'/><meta name='viewport' content='width=device-width, initial-scale=1.0'/><title>MedPass — Vue secours</title><link rel='stylesheet' href='/styles.css'/></head>
+<body><div class='app-bg'></div><main class='shell shell-site shell-full'><section class='phone-frame wide-frame site-frame site-frame-full'>
+<header class='topbar topbar-site landing-topbar'><div><p class='eyebrow'>Passeport médical d'urgence</p><h1>MedPass</h1><p class='muted site-subtitle'>Vue secours directe du patient.</p></div><div class='topbar-pill blue'>Accès d'urgence</div></header>
+<section class='hero-card hero-site hero-site-full'><div class='hero-copy'><span class='badge red'>Informations vitales</span><h2>{escape((data.get('first_name','')+' '+data.get('last_name','')).strip())}</h2><p class='muted site-description'>Accès immédiat aux données essentielles du patient.</p>
+<div class='feature-points feature-points-simple'><div class='mini-feature'><strong>Groupe sanguin</strong><span>{escape(data.get('blood_type') or '—')}</span></div><div class='mini-feature'><strong>Identifiant</strong><span>{escape(data.get('medpass_id') or '—')}</span></div><div class='mini-feature'><strong>Contact d'urgence</strong><span>{escape(data.get('emergency_contact_name') or 'Non renseigné')}<br>{escape(data.get('emergency_contact_phone') or 'Non renseigné')}</span></div></div>
+<div class='hero-actions' style='margin-top:18px;'>{phone_btn}</div></div>
+<div class='hero-visual app-card hero-visual-large'><div class='visual-badge-row'><span class='status-pill danger'>Urgence</span><span class='status-pill'>Secours</span></div><div class='visual-panel' style='justify-items:stretch; text-align:left;'><div class='app-card' style='padding:16px;'><h3>Allergies</h3><div class='array-list'>{chips(data.get('public_allergies'))}</div></div><div class='app-card' style='padding:16px;'><h3>Pathologies d'urgence</h3><div class='array-list'>{chips(data.get('public_conditions'))}</div></div><div class='app-card' style='padding:16px;'><h3>Consignes</h3><p class='muted' style='margin-bottom:0;'>{escape(data.get('emergency_instructions') or 'Aucune consigne spécifique.')}</p></div></div></div>
+</section></section></main></body></html>"""
+    return HTMLResponse(content=html)
+
+
 @app.get('/api/patients')
-def list_patients(user=Depends(require_role('doctor'))):
+def list_patients(include_archived: bool = Query(False), doctor=Depends(require_role('doctor'))):
+    where = 'AND d.is_archived = 0' if not include_archived else ''
     with get_conn() as conn:
-        rows = execute(conn,
-            """
-            SELECT u.id, u.email, u.first_name, u.last_name, u.birth_date,
+        rows = execute(conn, f"""
+            SELECT u.id, u.email, u.first_name, u.last_name, u.birth_date, u.phone_number,
                    d.blood_type, d.public_allergies_json, d.public_conditions_json, d.updated_at, d.is_archived
             FROM doctor_patients dp
             JOIN users u ON u.id = dp.patient_id
             JOIN dossiers d ON d.patient_id = u.id
-            WHERE dp.doctor_id = ?
+            WHERE dp.doctor_id = ? {where}
             ORDER BY u.first_name, u.last_name
-            """,
-            (user['id'],),
-        ).fetchall()
+        """, (doctor['id'],)).fetchall()
     for row in rows:
         row['public_allergies'] = json_loads_safe(row.pop('public_allergies_json'), [])
         row['public_conditions'] = json_loads_safe(row.pop('public_conditions_json'), [])
@@ -418,43 +468,63 @@ def list_patients(user=Depends(require_role('doctor'))):
 
 
 @app.post('/api/patients')
-def create_patient(payload: CreatePatientPayload, doctor=Depends(require_role('doctor'))):
+def create_or_link_patient(payload: CreatePatientPayload, doctor=Depends(require_role('doctor'))):
     with get_conn() as conn:
-        existing = execute(conn, 'SELECT id FROM users WHERE email = ?', (payload.email.lower(),)).fetchone()
-        if existing:
-            raise HTTPException(status_code=400, detail='Cet e-mail existe déjà.')
         now = utcnow()
-        patient_id = insert_user(
-            conn,
-            email=payload.email.lower(),
-            password_hash=hash_secret(payload.password),
-            role='patient',
-            first_name=payload.first_name.strip(),
-            last_name=payload.last_name.strip(),
-            birth_date=payload.birth_date,
-            doctor_pin_hash=None,
-            created_at=now,
-        )
-        private_data = create_default_private_data()
-        private_data.update(payload.private_data)
-        execute(conn,
-            """
-            INSERT INTO dossiers (
-                patient_id, blood_type, public_allergies_json, public_conditions_json,
-                emergency_contact_name, emergency_contact_phone, emergency_instructions,
-                private_data_enc, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                patient_id, payload.blood_type or '', json.dumps(payload.public_allergies, ensure_ascii=False),
-                json.dumps(payload.public_conditions, ensure_ascii=False), payload.emergency_contact_name or '',
-                payload.emergency_contact_phone or '', payload.emergency_instructions or '',
-                encrypt_text(json.dumps(private_data, ensure_ascii=False)), now, now,
-            ),
-        )
-        execute(conn, 'INSERT INTO doctor_patients (doctor_id, patient_id, created_at) VALUES (?,?,?)', (doctor['id'], patient_id, now))
-        token = secrets.token_urlsafe(24)
-        execute(conn, 'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (patient_id, token, now))
+        existing = execute(conn, 'SELECT * FROM users WHERE email = ?', (payload.email.lower(),)).fetchone()
+        if existing and existing['role'] != 'patient':
+            raise HTTPException(status_code=400, detail='Cet e-mail appartient déjà à un médecin.')
+        if existing:
+            patient_id = existing['id']
+            link = execute(conn, 'SELECT * FROM doctor_patients WHERE patient_id = ?', (patient_id,)).fetchone()
+            if not link:
+                execute(conn, 'INSERT INTO doctor_patients (doctor_id, patient_id, created_at) VALUES (?,?,?)', (doctor['id'], patient_id, now))
+            dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (patient_id,)).fetchone()
+            private_data = json_loads_safe(decrypt_text(dossier['private_data_enc']), create_default_private_data())
+            private_data.update(payload.private_data or {})
+            execute(conn, """
+                UPDATE dossiers SET blood_type=?, public_allergies_json=?, public_conditions_json=?, emergency_contact_name=?, emergency_contact_phone=?, emergency_instructions=?, private_data_enc=?, is_archived=0, updated_at=? WHERE patient_id=?
+            """, (
+                payload.blood_type or dossier.get('blood_type') or '',
+                json.dumps(payload.public_allergies or json_loads_safe(dossier.get('public_allergies_json'), []), ensure_ascii=False),
+                json.dumps(payload.public_conditions or json_loads_safe(dossier.get('public_conditions_json'), []), ensure_ascii=False),
+                payload.emergency_contact_name or dossier.get('emergency_contact_name') or '',
+                payload.emergency_contact_phone or dossier.get('emergency_contact_phone') or '',
+                payload.emergency_instructions or dossier.get('emergency_instructions') or '',
+                encrypt_text(json.dumps(private_data, ensure_ascii=False)),
+                now,
+                patient_id,
+            ))
+        else:
+            patient_id = insert_user(
+                conn,
+                email=payload.email.lower(),
+                password_hash=hash_secret(payload.password),
+                role='patient',
+                first_name=payload.first_name.strip(),
+                last_name=payload.last_name.strip(),
+                birth_date=payload.birth_date,
+                doctor_pin_hash=None,
+                phone_number=(payload.phone_number or '').strip(),
+                email_verified=0,
+                must_complete_onboarding=1,
+                created_at=now,
+            )
+            private_data = create_default_private_data()
+            private_data.update(payload.private_data or {})
+            execute(conn, """
+                INSERT INTO dossiers (
+                    patient_id, blood_type, public_allergies_json, public_conditions_json,
+                    emergency_contact_name, emergency_contact_phone, emergency_instructions,
+                    appointments_json, private_data_enc, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                patient_id, payload.blood_type or '', json.dumps(payload.public_allergies, ensure_ascii=False), json.dumps(payload.public_conditions, ensure_ascii=False),
+                payload.emergency_contact_name or '', payload.emergency_contact_phone or '', payload.emergency_instructions or '', '[]', encrypt_text(json.dumps(private_data, ensure_ascii=False)), now, now,
+            ))
+            execute(conn, 'INSERT INTO doctor_patients (doctor_id, patient_id, created_at) VALUES (?,?,?)', (doctor['id'], patient_id, now))
+            token = secrets.token_urlsafe(24)
+            execute(conn, 'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (patient_id, token, now))
         patient = execute(conn, 'SELECT * FROM users WHERE id = ?', (patient_id,)).fetchone()
         dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (patient_id,)).fetchone()
     return serialize_dossier(patient, dossier, include_private=True)
@@ -483,30 +553,23 @@ def doctor_update_patient(patient_id: int, payload: DossierUpdatePayload, x_doct
         if not link:
             raise HTTPException(status_code=404, detail='Patient introuvable pour ce médecin.')
         dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (patient_id,)).fetchone()
-        patient = execute(conn, 'SELECT * FROM users WHERE id = ?', (patient_id,)).fetchone()
-        if not patient or not dossier:
-            raise HTTPException(status_code=404, detail='Patient introuvable.')
         private_data = json_loads_safe(decrypt_text(dossier['private_data_enc']), create_default_private_data())
-        if payload.private_data is not None:
+        if payload.private_data:
             private_data.update(payload.private_data)
-        execute(conn,
-            """
-            UPDATE dossiers SET blood_type = ?, public_allergies_json = ?, public_conditions_json = ?,
-            emergency_contact_name = ?, emergency_contact_phone = ?, emergency_instructions = ?,
-            private_data_enc = ?, updated_at = ? WHERE patient_id = ?
-            """,
-            (
-                payload.blood_type if payload.blood_type is not None else dossier['blood_type'],
-                json.dumps(payload.public_allergies if payload.public_allergies is not None else json_loads_safe(dossier['public_allergies_json'], []), ensure_ascii=False),
-                json.dumps(payload.public_conditions if payload.public_conditions is not None else json_loads_safe(dossier['public_conditions_json'], []), ensure_ascii=False),
-                payload.emergency_contact_name if payload.emergency_contact_name is not None else dossier['emergency_contact_name'],
-                payload.emergency_contact_phone if payload.emergency_contact_phone is not None else dossier['emergency_contact_phone'],
-                payload.emergency_instructions if payload.emergency_instructions is not None else dossier['emergency_instructions'],
-                encrypt_text(json.dumps(private_data, ensure_ascii=False)),
-                utcnow(),
-                patient_id,
-            ),
-        )
+        execute(conn, """
+            UPDATE dossiers SET blood_type=?, public_allergies_json=?, public_conditions_json=?, emergency_contact_name=?, emergency_contact_phone=?, emergency_instructions=?, private_data_enc=?, updated_at=? WHERE patient_id=?
+        """, (
+            payload.blood_type or dossier.get('blood_type') or '',
+            json.dumps(payload.public_allergies or [], ensure_ascii=False),
+            json.dumps(payload.public_conditions or [], ensure_ascii=False),
+            payload.emergency_contact_name or '',
+            payload.emergency_contact_phone or '',
+            payload.emergency_instructions or '',
+            encrypt_text(json.dumps(private_data, ensure_ascii=False)),
+            utcnow(),
+            patient_id,
+        ))
+        patient = execute(conn, 'SELECT * FROM users WHERE id = ?', (patient_id,)).fetchone()
         dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (patient_id,)).fetchone()
     return serialize_dossier(patient, dossier, include_private=True)
 
@@ -522,37 +585,15 @@ def archive_patient(patient_id: int, x_doctor_pin: Optional[str] = Header(defaul
     return {'ok': True}
 
 
-@app.post('/api/patients/{patient_id}/allergies')
-def doctor_add_allergy(patient_id: int, payload: ArrayItemPayload, x_doctor_pin: Optional[str] = Header(default=None), doctor=Depends(require_role('doctor'))):
+@app.post('/api/patients/{patient_id}/restore')
+def restore_patient(patient_id: int, x_doctor_pin: Optional[str] = Header(default=None), doctor=Depends(require_role('doctor'))):
     require_doctor_pin(doctor, x_doctor_pin)
     with get_conn() as conn:
         link = execute(conn, 'SELECT * FROM doctor_patients WHERE doctor_id = ? AND patient_id = ?', (doctor['id'], patient_id)).fetchone()
         if not link:
             raise HTTPException(status_code=404, detail='Patient introuvable pour ce médecin.')
-        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (patient_id,)).fetchone()
-        items = json_loads_safe(dossier['public_allergies_json'], [])
-        items.append(payload.value)
-        execute(conn, 'UPDATE dossiers SET public_allergies_json = ?, updated_at = ? WHERE patient_id = ?', (json.dumps(items, ensure_ascii=False), utcnow(), patient_id))
-    return {'items': items}
-
-
-@app.post('/api/patients/{patient_id}/conditions')
-def doctor_add_condition(patient_id: int, payload: ArrayItemPayload, x_doctor_pin: Optional[str] = Header(default=None), doctor=Depends(require_role('doctor'))):
-    require_doctor_pin(doctor, x_doctor_pin)
-    with get_conn() as conn:
-        link = execute(conn, 'SELECT * FROM doctor_patients WHERE doctor_id = ? AND patient_id = ?', (doctor['id'], patient_id)).fetchone()
-        if not link:
-            raise HTTPException(status_code=404, detail='Patient introuvable pour ce médecin.')
-        dossier = execute(conn, 'SELECT * FROM dossiers WHERE patient_id = ?', (patient_id,)).fetchone()
-        items = json_loads_safe(dossier['public_conditions_json'], [])
-        items.append(payload.value)
-        execute(conn, 'UPDATE dossiers SET public_conditions_json = ?, updated_at = ? WHERE patient_id = ?', (json.dumps(items, ensure_ascii=False), utcnow(), patient_id))
-    return {'items': items}
-
-
-@app.get('/')
-def root_index():
-    return FileResponse(STATIC_DIR / 'index.html')
+        execute(conn, 'UPDATE dossiers SET is_archived = 0, updated_at = ? WHERE patient_id = ?', (utcnow(), patient_id))
+    return {'ok': True}
 
 
 app.mount('/', StaticFiles(directory=STATIC_DIR, html=True), name='static')

@@ -1,16 +1,2 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MedPass — PIN médecin</title>
-  <link rel="stylesheet" href="/styles.css" />
-</head>
-<body data-page="doctorPin">
-  <div class="app-bg"></div>
-  <main class="shell">
-<section class="phone-frame compact-frame"><header class="topbar"><div><p class="eyebrow">Sécurité médecin</p><h1>Valider le PIN</h1></div><div class="toolbar"><a href="/doctor.html" class="btn btn-secondary">Dashboard</a><button id="logout-btn" class="btn btn-secondary">Déconnexion</button></div></header><section class="section-block center"><span class="badge green">JWT + PIN 4 chiffres</span><p class="muted">Ce PIN est demandé avant d'ouvrir un dossier privé patient.</p><form id="doctor-pin-form" class="stack" style="margin-top:12px; width:100%;"><div class="label-block"><label>PIN</label><input name="pin" maxlength="4" placeholder="1234" required /></div><button class="btn btn-primary btn-full" type="submit">Valider</button></form><div id="pin-message"></div></section></section>
-</main>
-  <script src="/app.js"></script>
-</body>
-</html>
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>MedPass — PIN médecin</title><link rel="stylesheet" href="/styles.css" /></head>
+<body data-page="doctorPin"><div class="app-bg"></div><main class="shell"><section class="phone-frame compact-frame"><header class="topbar"><div><p class="eyebrow">Sécurité médecin</p><h1>Valider le PIN</h1></div><button id="logout-btn" class="btn btn-secondary">Déconnexion</button></header><nav id="global-nav" class="app-nav"></nav><section class="section-block center"><span class="badge green">PIN requis chaque heure</span><p class="muted">Le PIN est redemandé après une heure ou à la réouverture de l'appareil.</p><form id="doctor-pin-form" class="stack" style="margin-top:12px; width:100%;"><div class="label-block"><label>PIN</label><input name="pin" maxlength="4" placeholder="1234" required /></div><button class="btn btn-primary btn-full" type="submit">Valider</button></form><div id="pin-message"></div></section></section></main><script src="/app.js"></script></body></html>

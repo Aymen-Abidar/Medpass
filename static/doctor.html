@@ -1,16 +1,2 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MedPass — Médecin</title>
-  <link rel="stylesheet" href="/styles.css" />
-</head>
-<body data-page="doctor">
-  <div class="app-bg"></div>
-  <main class="shell">
-<section class="phone-frame wide-frame"><header class="topbar"><div><p class="eyebrow">Espace médecin</p><h1 id="doctor-name">Médecin</h1></div><div class="toolbar"><a href="/doctor-pin.html" class="btn btn-secondary">PIN</a><button id="logout-btn" class="btn btn-secondary">Déconnexion</button></div></header><nav class="app-nav"><a class="nav-link active" href="/doctor.html">Dashboard</a><a class="nav-link" href="/doctor-form.html">Créer un patient</a><a class="nav-link" href="/doctor-pin.html">Valider PIN</a><a class="nav-link" href="/scanner.html">Scanner</a></nav><section class="kpi-grid section-block"><div class="kpi-card"><p class="muted">Patients</p><div id="doctor-count">0</div></div><div class="kpi-card"><p class="muted">Avec allergies</p><div id="critical-count">0</div></div><div class="kpi-card"><p class="muted">Archivés</p><div id="archived-count">0</div></div><div class="kpi-card"><p class="muted">Accès privé</p><div>PIN requis</div></div></section><section class="section-block"><div class="section-title-row"><div><p class="section-kicker">Mes patients</p><h3>Liste liée à ce médecin</h3></div><a class="btn btn-primary" href="/doctor-form.html">Ajouter un patient</a></div><div id="doctor-patient-list" class="patient-list"></div><div id="doctor-message"></div></section></section>
-</main>
-  <script src="/app.js"></script>
-</body>
-</html>
+<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>MedPass — Médecin</title><link rel="stylesheet" href="/styles.css" /></head>
+<body data-page="doctor"><div class="app-bg"></div><main class="shell"><section class="phone-frame wide-frame"><header class="topbar"><div><p class="eyebrow">Espace médecin</p><h1 id="doctor-name">Médecin</h1></div><button id="logout-btn" class="btn btn-secondary">Déconnexion</button></header><nav id="global-nav" class="app-nav"></nav><section class="kpi-grid section-block"><div class="kpi-card"><p class="muted">Patients actifs</p><div id="doctor-count">0</div></div><div class="kpi-card"><p class="muted">Avec allergies</p><div id="critical-count">0</div></div><div class="kpi-card"><p class="muted">Archivés</p><div id="archived-count">0</div></div><div class="kpi-card"><p class="muted">PIN</p><div>1 heure</div></div></section><section class="section-block"><div class="section-title-row"><div><p class="section-kicker">Patients</p><h3 id="doctor-section-title">Patients actifs</h3></div><a href="/doctor-form.html" class="btn btn-primary">Créer / lier un patient</a></div><div id="doctor-patient-list" class="patient-list"></div><div id="doctor-message"></div></section></section></main><script src="/app.js"></script></body></html>

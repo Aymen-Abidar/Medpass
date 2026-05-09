@@ -312,3 +312,41 @@ h4 { font-size: 1rem; margin-bottom: 8px; }
   h1 { font-size: 1.8rem; }
   h2 { font-size: 1.4rem; }
 }
+
+
+.action-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 8, 15, 0.65);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  padding: 18px;
+}
+.action-modal-box {
+  width: min(420px, 100%);
+  background: linear-gradient(180deg, rgba(14, 26, 48, 0.98), rgba(10, 18, 34, 0.98));
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 28px;
+  padding: 28px;
+  box-shadow: 0 28px 80px rgba(0,0,0,.35);
+  text-align: center;
+}
+.action-modal-icon {
+  width: 70px;
+  height: 70px;
+  margin: 0 auto 14px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  background: rgba(39,195,138,.16);
+  color: #c6ffe9;
+  font-size: 2rem;
+  font-weight: 800;
+}
+#global-nav.app-nav { margin-bottom: 18px; }
+#appointment-form { align-items: end; }
+#appointment-form .btn { margin-top: 8px; }
+@media (max-width: 880px) {
+  #appointment-form { grid-template-columns: 1fr; }
+}
