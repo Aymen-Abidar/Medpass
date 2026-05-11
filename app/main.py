@@ -27,8 +27,12 @@ from .config import (
 )
 from .db import create_default_private_data, execute, get_conn, init_db, insert_user, utcnow
 from .schemas import (
+    AccountProfileUpdatePayload,
     AppointmentPayload,
     CompleteOnboardingPayload,
+    ChangeEmailConfirmPayload,
+    ChangeEmailRequestPayload,
+    ChangePasswordPayload,
     CreatePatientPayload,
     DoctorPinPayload,
     DossierUpdatePayload,
@@ -309,6 +313,81 @@ def me(user=Depends(get_current_user)):
         'must_complete_onboarding': bool(user.get('must_complete_onboarding')),
         'doctor_pin_recheck_minutes': DOCTOR_PIN_RECHECK_MINUTES,
     }
+
+
+@app.get('/api/account/settings')
+def account_settings(user=Depends(get_current_user)):
+    return {
+        'id': user['id'],
+        'role': user['role'],
+        'email': user['email'],
+        'first_name': user['first_name'],
+        'last_name': user['last_name'],
+        'birth_date': user['birth_date'],
+        'phone_number': user.get('phone_number') or '',
+        'email_verified': bool(user.get('email_verified')),
+    }
+
+
+@app.put('/api/account/profile')
+def update_account_profile(payload: AccountProfileUpdatePayload, user=Depends(get_current_user)):
+    with get_conn() as conn:
+        execute(conn, 'UPDATE users SET first_name = ?, last_name = ?, birth_date = ?, phone_number = ? WHERE id = ?',
+                (payload.first_name.strip(), payload.last_name.strip(), payload.birth_date, (payload.phone_number or '').strip(), user['id']))
+        updated = execute(conn, 'SELECT * FROM users WHERE id = ?', (user['id'],)).fetchone()
+    return {
+        'id': updated['id'],
+        'role': updated['role'],
+        'email': updated['email'],
+        'first_name': updated['first_name'],
+        'last_name': updated['last_name'],
+        'birth_date': updated['birth_date'],
+        'phone_number': updated.get('phone_number') or '',
+        'email_verified': bool(updated.get('email_verified')),
+    }
+
+
+@app.post('/api/account/request-email-change')
+def request_email_change(payload: ChangeEmailRequestPayload, user=Depends(get_current_user)):
+    new_email = payload.new_email.lower().strip()
+    if new_email == user['email'].lower():
+        raise HTTPException(status_code=400, detail='Cet e-mail est déjà utilisé sur votre compte.')
+    code = ''.join(secrets.choice('0123456789') for _ in range(6))
+    now = now_dt()
+    expires = now + timedelta(minutes=EMAIL_CODE_EXPIRY_MINUTES)
+    purpose = f'change_email:{user["id"]}'
+    with get_conn() as conn:
+        existing = execute(conn, 'SELECT id FROM users WHERE email = ?', (new_email,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=400, detail='Cet e-mail est déjà utilisé.')
+        execute(conn, 'INSERT INTO email_verifications (email, code_hash, purpose, created_at, expires_at, is_used) VALUES (?,?,?,?,?,0)',
+                (new_email, hash_secret(code), purpose, now.isoformat(), expires.isoformat()))
+    result = send_email_code_message(new_email, code, 'change_email')
+    return {'ok': True, **result}
+
+
+@app.post('/api/account/confirm-email-change')
+def confirm_email_change(payload: ChangeEmailConfirmPayload, user=Depends(get_current_user)):
+    new_email = payload.new_email.lower().strip()
+    purpose = f'change_email:{user["id"]}'
+    with get_conn() as conn:
+        existing = execute(conn, 'SELECT id FROM users WHERE email = ?', (new_email,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=400, detail='Cet e-mail est déjà utilisé.')
+        verify_email_code(conn, new_email, payload.verification_code, purpose)
+        execute(conn, 'UPDATE users SET email = ?, email_verified = 1 WHERE id = ?', (new_email, user['id']))
+        updated = execute(conn, 'SELECT * FROM users WHERE id = ?', (user['id'],)).fetchone()
+    token = create_token({'id': updated['id'], 'role': updated['role'], 'email': updated['email']})
+    return {'token': token, 'user': {'id': updated['id'], 'role': updated['role'], 'email': updated['email'], 'first_name': updated['first_name'], 'last_name': updated['last_name'], 'must_complete_onboarding': bool(updated.get('must_complete_onboarding'))}}
+
+
+@app.post('/api/account/change-password')
+def change_password(payload: ChangePasswordPayload, user=Depends(get_current_user)):
+    if not verify_secret(payload.current_password, user['password_hash']):
+        raise HTTPException(status_code=400, detail='Mot de passe actuel incorrect.')
+    with get_conn() as conn:
+        execute(conn, 'UPDATE users SET password_hash = ? WHERE id = ?', (hash_secret(payload.new_password), user['id']))
+    return {'ok': True}
 
 
 @app.post('/api/doctor/verify-pin')
@@ -599,6 +678,39 @@ def restore_patient(patient_id: int, x_doctor_pin: Optional[str] = Header(defaul
             raise HTTPException(status_code=404, detail='Patient introuvable pour ce médecin.')
         execute(conn, 'UPDATE dossiers SET is_archived = 0, updated_at = ? WHERE patient_id = ?', (utcnow(), patient_id))
     return {'ok': True}
+
+
+@app.get('/api/doctor/rescue-links')
+def doctor_rescue_links(request: Request, doctor=Depends(require_role('doctor'))):
+    items = []
+    with get_conn() as conn:
+        rows = execute(conn, """
+            SELECT u.id, u.first_name, u.last_name, u.email, d.blood_type, d.emergency_contact_name, d.emergency_contact_phone,
+                   q.token
+            FROM doctor_patients dp
+            JOIN users u ON u.id = dp.patient_id
+            JOIN dossiers d ON d.patient_id = u.id
+            LEFT JOIN qrcodes q ON q.patient_id = u.id AND q.is_active = 1
+            WHERE dp.doctor_id = ? AND d.is_archived = 0
+            ORDER BY u.first_name, u.last_name
+        """, (doctor['id'],)).fetchall()
+        for row in rows:
+            token = row.get('token')
+            if not token:
+                token = secrets.token_urlsafe(24)
+                execute(conn, 'INSERT INTO qrcodes (patient_id, token, is_active, created_at) VALUES (?,?,1,?)', (row['id'], token, utcnow()))
+            items.append({
+                'patient_id': row['id'],
+                'first_name': row['first_name'],
+                'last_name': row['last_name'],
+                'email': row['email'],
+                'blood_type': row.get('blood_type') or '',
+                'emergency_contact_name': row.get('emergency_contact_name') or '',
+                'emergency_contact_phone': row.get('emergency_contact_phone') or '',
+                'token': token,
+                'public_url': get_site_origin(request) + f'/api/secours/{token}',
+            })
+    return {'items': items}
 
 
 app.mount('/', StaticFiles(directory=STATIC_DIR, html=True), name='static')

@@ -35,6 +35,10 @@ function renderBadges(items){
   return arr.map(item => `<span class="array-item">${escapeHtml(item.title || item)}</span>`).join('');
 }
 
+async function copyText(value){
+  await navigator.clipboard.writeText(value);
+}
+
 async function api(path, options = {}){
   const headers = new Headers(options.headers || {});
   if(getToken()) headers.set('Authorization', `Bearer ${getToken()}`);
@@ -117,35 +121,40 @@ function logout(){
   location.href = '/login.html';
 }
 
+
 function mountGlobalNav(page, user){
   const nav = qs('#global-nav');
   if(!nav) return;
   let links = [];
   if(user?.role === 'patient'){
     links = [
-      ['/client.html', 'Accueil patient', page === 'client'],
-      ['/patient-profile.html', 'Mon profil', page === 'patientProfile'],
-      ['/patient-qr.html', 'Mon QR', page === 'patientQr'],
+      ['/client.html', 'Accueil', page === 'client'],
+      ['/patient-profile.html', 'Profil médical', page === 'patientProfile'],
+      ['/patient-qr.html', 'QR Code', page === 'patientQr'],
+      ['/account-settings.html', 'Paramètres', page === 'accountSettings'],
       ['/scanner.html', 'Scanner', page === 'scanner'],
     ];
   } else if(user?.role === 'doctor'){
     links = [
       ['/doctor.html', 'Dashboard', page === 'doctor' && !location.search.includes('view=archived')],
-      ['/doctor.html?view=archived', 'Archived', location.search.includes('view=archived')],
-      ['/doctor-form.html', 'Créer / lier un patient', page === 'doctorForm'],
-      ['/doctor-pin.html', 'Valider PIN', page === 'doctorPin'],
+      ['/doctor-form.html', 'Patients', page === 'doctorForm' || page === 'doctorPatient'],
+      ['/doctor-rescue.html', 'Vue secours', page === 'doctorRescue'],
+      ['/doctor.html?view=archived', 'Archivés', location.search.includes('view=archived')],
+      ['/account-settings.html', 'Paramètres', page === 'accountSettings'],
+      ['/doctor-pin.html', 'PIN', page === 'doctorPin'],
       ['/scanner.html', 'Scanner', page === 'scanner'],
     ];
   } else {
     links = [
       ['/', 'Accueil', page === 'landing'],
-      ['/login.html', 'Entrer dans l’app', page === 'login'],
+      ['/login.html', 'Connexion', page === 'login'],
       ['/signup.html', 'Créer un compte', page === 'signup'],
       ['/scanner.html', 'Scanner', page === 'scanner'],
     ];
   }
-  nav.innerHTML = links.map(([href, label, active]) => `<a class="nav-link ${active ? 'active' : ''}" href="${href}">${label}</a>`).join('');
+  nav.innerHTML = `<div class="menu-bar">${links.map(([href, label, active]) => `<a class="nav-link ${active ? 'active' : ''}" href="${href}">${label}</a>`).join('')}</div>`;
 }
+
 
 function protect(expectedRole){
   const user = getUser();
@@ -498,27 +507,33 @@ async function initDoctor(){
   qs('#doctor-name').textContent = `${user.first_name} ${user.last_name}`;
   const box = qs('#doctor-message');
   const isArchivedView = new URLSearchParams(location.search).get('view') === 'archived';
+  const searchInput = qs('#doctor-search');
   try {
     const data = await api(`/patients${isArchivedView ? '?include_archived=true' : ''}`);
-    const items = (data.items || []).filter(item => isArchivedView ? item.is_archived : !item.is_archived);
-    qs('#doctor-count').textContent = (data.items || []).filter(x => !x.is_archived).length;
-    qs('#critical-count').textContent = (data.items || []).filter(x => (x.public_allergies || []).length).length;
-    qs('#archived-count').textContent = (data.items || []).filter(x => x.is_archived).length;
-    qs('#doctor-section-title').textContent = isArchivedView ? 'Patients archivés' : 'Patients actifs';
-    qs('#doctor-patient-list').innerHTML = items.length ? items.map(p => `
-      <div class="patient-card">
-        <div class="split"><div><h4>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</h4><p class="muted">${escapeHtml(p.email)}${p.phone_number ? ' • ' + escapeHtml(p.phone_number) : ''}</p></div>
-        <span class="status-pill ${p.is_archived ? 'danger' : 'success'}">${p.is_archived ? 'Archivé' : 'Actif'}</span></div>
-        <div class="array-list" style="margin:10px 0 12px;">${renderBadges(p.public_conditions || [])}</div>
-        <div class="split">
-          <span class="muted">Allergies: ${(p.public_allergies || []).length}</span>
-          ${p.is_archived ? `<button class="btn btn-secondary" data-restore="${p.id}">Désarchiver</button>` : `<a class="btn btn-secondary" href="/doctor-patient.html?id=${p.id}">Ouvrir le dossier</a>`}
-        </div>
-      </div>`).join('') : '<div class="patient-card"><p class="muted">Aucun patient à afficher.</p></div>';
-    qsa('[data-restore]').forEach(btn => btn.addEventListener('click', async () => {
-      try { await api(`/patients/${btn.dataset.restore}/restore`, { method: 'POST' }); success(box, 'Patient désarchivé avec succès.'); initDoctor(); }
-      catch(err){ showInlineMessage(box, err.message, 'error'); }
-    }));
+const items = (data.items || []).filter(item => isArchivedView ? item.is_archived : !item.is_archived);
+qs('#doctor-count').textContent = (data.items || []).filter(x => !x.is_archived).length;
+qs('#critical-count').textContent = (data.items || []).filter(x => (x.public_allergies || []).length).length;
+qs('#archived-count').textContent = (data.items || []).filter(x => x.is_archived).length;
+qs('#doctor-section-title').textContent = isArchivedView ? 'Patients archivés' : 'Patients actifs';
+const renderDoctorItems = (term='') => {
+  const filtered = items.filter(p => `${p.first_name} ${p.last_name} ${p.email}`.toLowerCase().includes(term.toLowerCase()));
+  qs('#doctor-patient-list').innerHTML = filtered.length ? filtered.map(p => `
+    <div class="patient-card patient-card-rich">
+      <div class="split"><div><h4>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</h4><p class="muted">${escapeHtml(p.email)}${p.phone_number ? ' • ' + escapeHtml(p.phone_number) : ''}</p></div>
+      <span class="status-pill ${p.is_archived ? 'danger' : 'success'}">${p.is_archived ? 'Archivé' : 'Actif'}</span></div>
+      <div class="array-list" style="margin:10px 0 12px;">${renderBadges(p.public_conditions || [])}</div>
+      <div class="split">
+        <span class="muted">Allergies: ${(p.public_allergies || []).length}</span>
+        ${p.is_archived ? `<button class="btn btn-secondary" data-restore="${p.id}">Désarchiver</button>` : `<div class="toolbar"><a class="btn btn-secondary" href="/doctor-patient.html?id=${p.id}">Ouvrir le dossier</a></div>`}
+      </div>
+    </div>`).join('') : '<div class="patient-card"><p class="muted">Aucun patient à afficher.</p></div>';
+  qsa('[data-restore]').forEach(btn => btn.addEventListener('click', async () => {
+    try { await api(`/patients/${btn.dataset.restore}/restore`, { method: 'POST' }); success(box, 'Patient désarchivé avec succès.'); initDoctor(); }
+    catch(err){ showInlineMessage(box, err.message, 'error'); }
+  }));
+};
+renderDoctorItems();
+searchInput?.addEventListener('input', () => renderDoctorItems(searchInput.value.trim()));
   } catch(err){ showInlineMessage(box, `${err.message} — validez le PIN si nécessaire.`, 'error'); }
 }
 
@@ -651,7 +666,7 @@ async function initScanner(){
       const token = form.elements['token'].value.trim();
       const d = await api(`/qrcode/verify/${encodeURIComponent(token)}`);
       if(!d.valid) throw new Error('Token invalide.');
-      location.href = `/secours/${encodeURIComponent(token)}`;
+      location.href = `/api/secours/${encodeURIComponent(token)}`;
     } catch(err){ showInlineMessage(box, err.message, 'error'); }
   });
 }
@@ -666,7 +681,7 @@ async function initEmergency(){
   qs('#emergency-search-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const t = e.currentTarget.elements['token'].value.trim();
-    location.href = `/secours/${encodeURIComponent(t)}`;
+    location.href = `/api/secours/${encodeURIComponent(t)}`;
   });
   if(!token) return;
   try {
@@ -679,6 +694,135 @@ async function initEmergency(){
     qs('#emergency-conditions').innerHTML = renderBadges(d.public_conditions);
     qs('#emergency-instructions').textContent = d.emergency_instructions || 'Aucune consigne spécifique.';
   } catch(err){ showInlineMessage(box, err.message, 'error'); }
+}
+
+
+async function initDoctorRescue(){
+  const user = protect('doctor'); if(!user) return;
+  mountGlobalNav('doctorRescue', user);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const box = qs('#doctor-rescue-message');
+  const search = qs('#doctor-rescue-search');
+  try {
+    const data = await api('/doctor/rescue-links');
+    const items = data.items || [];
+    const renderItems = (term='') => {
+      const filtered = items.filter(item => `${item.first_name} ${item.last_name} ${item.email}`.toLowerCase().includes(term.toLowerCase()));
+      qs('#doctor-rescue-list').innerHTML = filtered.length ? filtered.map(item => `
+        <div class="patient-card patient-card-rich">
+          <div class="split"><div><h4>${escapeHtml(item.first_name)} ${escapeHtml(item.last_name)}</h4><p class="muted">${escapeHtml(item.email)}</p></div><span class="status-pill">${escapeHtml(item.blood_type || '—')}</span></div>
+          <p class="muted" style="margin:10px 0 14px;">Contact urgence: ${escapeHtml(item.emergency_contact_name || 'Non renseigné')}${item.emergency_contact_phone ? ' • ' + escapeHtml(item.emergency_contact_phone) : ''}</p>
+          <div class="toolbar">
+            <a class="btn btn-primary" href="${item.public_url}" target="_blank" rel="noopener">Ouvrir la vue secours</a>
+            <button class="btn btn-secondary" data-copy-rescue="${escapeHtml(item.public_url)}">Copier le lien</button>
+          </div>
+        </div>
+      `).join('') : '<div class="patient-card"><p class="muted">Aucun patient correspondant.</p></div>';
+      qsa('[data-copy-rescue]').forEach(btn => btn.addEventListener('click', async () => {
+        try { await copyText(btn.dataset.copyRescue); success(box, 'Lien secours copié avec succès.'); }
+        catch(err){ showInlineMessage(box, err.message, 'error'); }
+      }));
+    };
+    renderItems();
+    search?.addEventListener('input', () => renderItems(search.value.trim()));
+  } catch(err){ showInlineMessage(box, `${err.message} — validez le PIN si nécessaire.`, 'error'); }
+}
+
+async function initAccountSettings(){
+  const user = getUser();
+  if(!user || !getToken()){ location.href = '/login.html'; return; }
+  const refreshed = await refreshUser();
+  mountGlobalNav('accountSettings', refreshed);
+  qs('#logout-btn')?.addEventListener('click', logout);
+  const infoBox = qs('#settings-info-message');
+  const emailBox = qs('#settings-email-message');
+  const passwordBox = qs('#settings-password-message');
+  const profileForm = qs('#settings-profile-form');
+  const emailForm = qs('#settings-email-form');
+  const passwordForm = qs('#settings-password-form');
+  let pendingEmail = '';
+  try {
+    const me = await api('/account/settings');
+    qs('#settings-name').textContent = `${me.first_name} ${me.last_name}`;
+    qs('#settings-role').textContent = me.role === 'doctor' ? 'Médecin' : 'Patient';
+    profileForm.elements['first_name'].value = me.first_name || '';
+    profileForm.elements['last_name'].value = me.last_name || '';
+    profileForm.elements['birth_date'].value = me.birth_date || '';
+    profileForm.elements['phone_number'].value = me.phone_number || '';
+    qs('#current-email').textContent = me.email;
+    qs('#email-status').textContent = me.email_verified ? 'E-mail vérifié' : 'E-mail non vérifié';
+  } catch(err){ showInlineMessage(infoBox, err.message, 'error'); }
+
+  profileForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const updated = await api('/account/profile', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: profileForm.elements['first_name'].value.trim(),
+          last_name: profileForm.elements['last_name'].value.trim(),
+          birth_date: profileForm.elements['birth_date'].value,
+          phone_number: profileForm.elements['phone_number'].value.trim(),
+        }),
+      });
+      const local = { ...getUser(), ...updated };
+      setUser(local);
+      qs('#settings-name').textContent = `${updated.first_name} ${updated.last_name}`;
+      success(infoBox, 'Informations personnelles mises à jour.');
+    } catch(err){ showInlineMessage(infoBox, err.message, 'error'); }
+  });
+
+  qs('#send-email-change-code')?.addEventListener('click', async () => {
+    const nextEmail = emailForm.elements['new_email'].value.trim();
+    if(!nextEmail){ showInlineMessage(emailBox, 'Saisissez le nouvel e-mail.', 'error'); return; }
+    try {
+      const data = await api('/account/request-email-change', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_email: nextEmail }),
+      });
+      pendingEmail = nextEmail;
+      qs('#email-code-wrap')?.classList.remove('hidden');
+      let msg = 'Code envoyé au nouvel e-mail.';
+      if(data.dev_code) msg += ` Code local: ${data.dev_code}`;
+      success(emailBox, msg, 'Code envoyé');
+    } catch(err){ showInlineMessage(emailBox, err.message, 'error'); }
+  });
+
+  emailForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      const data = await api('/account/confirm-email-change', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          new_email: pendingEmail || emailForm.elements['new_email'].value.trim(),
+          verification_code: emailForm.elements['verification_code'].value.trim(),
+        }),
+      });
+      setToken(data.token);
+      setUser(data.user);
+      qs('#current-email').textContent = data.user.email;
+      qs('#email-status').textContent = 'E-mail vérifié';
+      emailForm.reset();
+      qs('#email-code-wrap')?.classList.add('hidden');
+      pendingEmail = '';
+      success(emailBox, 'Adresse e-mail modifiée et vérifiée.');
+    } catch(err){ showInlineMessage(emailBox, err.message, 'error'); }
+  });
+
+  passwordForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('/account/change-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          current_password: passwordForm.elements['current_password'].value,
+          new_password: passwordForm.elements['new_password'].value,
+        }),
+      });
+      passwordForm.reset();
+      success(passwordBox, 'Mot de passe modifié avec succès.');
+    } catch(err){ showInlineMessage(passwordBox, err.message, 'error'); }
+  });
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -695,6 +839,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     doctorForm: initDoctorForm,
     doctorPin: initDoctorPin,
     doctorPatient: initDoctorPatient,
+    doctorRescue: initDoctorRescue,
+    accountSettings: initAccountSettings,
     scanner: initScanner,
     emergency: initEmergency,
   };

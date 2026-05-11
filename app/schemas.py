@@ -69,3 +69,24 @@ class CreatePatientPayload(BaseModel):
 
 class ArrayItemPayload(BaseModel):
     value: str
+
+
+class AccountProfileUpdatePayload(BaseModel):
+    first_name: str
+    last_name: str
+    birth_date: Optional[str] = None
+    phone_number: Optional[str] = None
+
+
+class ChangeEmailRequestPayload(BaseModel):
+    new_email: EmailStr
+
+
+class ChangeEmailConfirmPayload(BaseModel):
+    new_email: EmailStr
+    verification_code: str = Field(min_length=4, max_length=8)
+
+
+class ChangePasswordPayload(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
