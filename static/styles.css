@@ -391,3 +391,26 @@ body[data-page="landing"] .site-frame-full { width: 100%; max-width: none; min-h
   .dashboard-banner, .section-title-row { flex-direction:column; align-items:flex-start; }
   .search-input { width:100%; max-width:none; }
 }
+
+
+.mobile-nav-shell { position: relative; width: 100%; display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; }
+.menu-toggle-btn { width:56px; height:56px; border-radius:18px; border:1px solid var(--stroke); background: rgba(255,255,255,.08); display:grid; align-content:center; gap:6px; padding:0 14px; cursor:pointer; }
+.menu-toggle-btn span { display:block; height:2px; border-radius:999px; background: var(--text); }
+.menu-drawer { position:absolute; top:66px; left:0; min-width:250px; max-width:min(82vw, 320px); z-index:40; }
+.menu-drawer-inner { display:grid; gap:10px; padding:14px; border-radius:22px; border:1px solid var(--stroke); background: linear-gradient(180deg, rgba(14, 25, 46, 0.98), rgba(9, 18, 33, 0.98)); box-shadow: 0 18px 50px rgba(0,0,0,.28); }
+.settings-shortcut { margin-left:auto; }
+.danger-section { border-color: rgba(255,92,114,.22); }
+.action-modal-box.verification-modal-box .action-modal-icon.info { background: rgba(78,168,255,.16); color:#d9eeff; }
+@media (max-width: 880px) { .mobile-nav-shell { align-items:center; } .settings-shortcut { width:auto; } }
+
+
+/* compact navigation */
+#logout-btn { display: none !important; }
+.nav-shell { position: relative; width: 100%; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.menu-toggle { width: 54px; height: 54px; border-radius: 16px; border: 1px solid var(--stroke); background: rgba(255,255,255,.06); display:grid; align-content:center; gap:6px; padding: 0 14px; }
+.menu-toggle span { display:block; height:2px; border-radius:999px; background: var(--text); }
+.nav-settings-btn { min-width: 132px; }
+.menu-drawer { position:absolute; top:64px; left:0; z-index:60; width:min(280px, calc(100vw - 28px)); }
+.menu-drawer-inner { display:grid; gap:10px; padding:14px; border-radius:22px; border:1px solid var(--stroke); background: linear-gradient(180deg, rgba(14,25,46,.98), rgba(9,18,33,.98)); box-shadow: 0 18px 50px rgba(0,0,0,.28); }
+.menu-drawer .nav-link { width:100%; }
+@media (max-width: 560px) { .nav-settings-btn { min-width: 110px; padding-left:12px; padding-right:12px; } .menu-toggle { width:50px; height:50px; } }

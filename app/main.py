@@ -33,6 +33,7 @@ from .schemas import (
     ChangeEmailConfirmPayload,
     ChangeEmailRequestPayload,
     ChangePasswordPayload,
+    DeleteAccountPayload,
     CreatePatientPayload,
     DoctorPinPayload,
     DossierUpdatePayload,
@@ -389,6 +390,25 @@ def change_password(payload: ChangePasswordPayload, user=Depends(get_current_use
         execute(conn, 'UPDATE users SET password_hash = ? WHERE id = ?', (hash_secret(payload.new_password), user['id']))
     return {'ok': True}
 
+
+@app.delete('/api/account/delete')
+def delete_account(payload: DeleteAccountPayload, user=Depends(get_current_user)):
+    if not verify_secret(payload.current_password, user['password_hash']):
+        raise HTTPException(status_code=400, detail='Mot de passe actuel incorrect.')
+    with get_conn() as conn:
+        if user['role'] == 'patient':
+            execute(conn, 'DELETE FROM doctor_patients WHERE patient_id = ?', (user['id'],))
+            execute(conn, 'DELETE FROM access_logs WHERE patient_id = ? OR accessed_by = ?', (user['id'], user['id']))
+            execute(conn, 'DELETE FROM qrcodes WHERE patient_id = ?', (user['id'],))
+            execute(conn, 'DELETE FROM dossiers WHERE patient_id = ?', (user['id'],))
+            execute(conn, 'DELETE FROM email_verifications WHERE email = ?', (user['email'],))
+            execute(conn, 'DELETE FROM users WHERE id = ?', (user['id'],))
+        else:
+            execute(conn, 'DELETE FROM doctor_patients WHERE doctor_id = ?', (user['id'],))
+            execute(conn, 'DELETE FROM access_logs WHERE accessed_by = ?', (user['id'],))
+            execute(conn, 'DELETE FROM email_verifications WHERE email = ?', (user['email'],))
+            execute(conn, 'DELETE FROM users WHERE id = ?', (user['id'],))
+    return {'ok': True}
 
 @app.post('/api/doctor/verify-pin')
 def verify_doctor_pin(payload: DoctorPinPayload, user=Depends(require_role('doctor'))):

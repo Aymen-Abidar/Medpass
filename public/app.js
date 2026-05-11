@@ -136,8 +136,7 @@ function mountGlobalNav(page, user){
     ];
   } else if(user?.role === 'doctor'){
     links = [
-      ['/doctor.html', 'Dashboard', page === 'doctor' && !location.search.includes('view=archived')],
-      ['/doctor-form.html', 'Patients', page === 'doctorForm' || page === 'doctorPatient'],
+      ['/doctor.html', 'Patients', page === 'doctor' || page === 'doctorPatient'],
       ['/doctor-rescue.html', 'Vue secours', page === 'doctorRescue'],
       ['/doctor.html?view=archived', 'Archivés', location.search.includes('view=archived')],
       ['/account-settings.html', 'Paramètres', page === 'accountSettings'],
@@ -506,43 +505,61 @@ async function initDoctor(){
   qs('#logout-btn')?.addEventListener('click', logout);
   qs('#doctor-name').textContent = `${user.first_name} ${user.last_name}`;
   const box = qs('#doctor-message');
-  const isArchivedView = new URLSearchParams(location.search).get('view') === 'archived';
+  const formBox = qs('#doctor-form-message');
+  const createSection = qs('#doctor-create-inline');
   const searchInput = qs('#doctor-search');
-  try {
-    const data = await api(`/patients${isArchivedView ? '?include_archived=true' : ''}`);
-const items = (data.items || []).filter(item => isArchivedView ? item.is_archived : !item.is_archived);
-qs('#doctor-count').textContent = (data.items || []).filter(x => !x.is_archived).length;
-qs('#critical-count').textContent = (data.items || []).filter(x => (x.public_allergies || []).length).length;
-qs('#archived-count').textContent = (data.items || []).filter(x => x.is_archived).length;
-qs('#doctor-section-title').textContent = isArchivedView ? 'Patients archivés' : 'Patients actifs';
-const renderDoctorItems = (term='') => {
-  const filtered = items.filter(p => `${p.first_name} ${p.last_name} ${p.email}`.toLowerCase().includes(term.toLowerCase()));
-  qs('#doctor-patient-list').innerHTML = filtered.length ? filtered.map(p => `
-    <div class="patient-card patient-card-rich">
-      <div class="split"><div><h4>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</h4><p class="muted">${escapeHtml(p.email)}${p.phone_number ? ' • ' + escapeHtml(p.phone_number) : ''}</p></div>
-      <span class="status-pill ${p.is_archived ? 'danger' : 'success'}">${p.is_archived ? 'Archivé' : 'Actif'}</span></div>
-      <div class="array-list" style="margin:10px 0 12px;">${renderBadges(p.public_conditions || [])}</div>
-      <div class="split">
-        <span class="muted">Allergies: ${(p.public_allergies || []).length}</span>
-        ${p.is_archived ? `<button class="btn btn-secondary" data-restore="${p.id}">Désarchiver</button>` : `<div class="toolbar"><a class="btn btn-secondary" href="/doctor-patient.html?id=${p.id}">Ouvrir le dossier</a></div>`}
-      </div>
-    </div>`).join('') : '<div class="patient-card"><p class="muted">Aucun patient à afficher.</p></div>';
-  qsa('[data-restore]').forEach(btn => btn.addEventListener('click', async () => {
-    try { await api(`/patients/${btn.dataset.restore}/restore`, { method: 'POST' }); success(box, 'Patient désarchivé avec succès.'); initDoctor(); }
-    catch(err){ showInlineMessage(box, err.message, 'error'); }
-  }));
-};
-renderDoctorItems();
-searchInput?.addEventListener('input', () => renderDoctorItems(searchInput.value.trim()));
-  } catch(err){ showInlineMessage(box, `${err.message} — validez le PIN si nécessaire.`, 'error'); }
-}
+  const pageParams = new URLSearchParams(location.search);
+  const isArchivedView = pageParams.get('view') === 'archived';
+  const openCreateOnLoad = pageParams.get('create') === '1';
+  let currentItems = [];
 
-async function initDoctorForm(){
-  const user = protect('doctor'); if(!user) return;
-  mountGlobalNav('doctorForm', user);
-  qs('#logout-btn')?.addEventListener('click', logout);
+  const showCreate = () => {
+    createSection?.classList.remove('hidden');
+    createSection?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const hideCreate = () => {
+    createSection?.classList.add('hidden');
+    qs('#doctor-create-patient-form')?.reset();
+    if(formBox) formBox.innerHTML = '';
+  };
+  qs('#show-create-patient')?.addEventListener('click', showCreate);
+  qs('#show-create-patient-secondary')?.addEventListener('click', showCreate);
+  qs('#hide-create-patient')?.addEventListener('click', hideCreate);
+  qs('#cancel-create-patient')?.addEventListener('click', hideCreate);
+
+  const renderDoctorItems = (term='') => {
+    const filtered = currentItems.filter(p => `${p.first_name} ${p.last_name} ${p.email} ${p.phone_number || ''}`.toLowerCase().includes(term.toLowerCase()));
+    qs('#doctor-patient-list').innerHTML = filtered.length ? filtered.map(p => `
+      <div class="patient-card patient-card-rich">
+        <div class="split"><div><h4>${escapeHtml(p.first_name)} ${escapeHtml(p.last_name)}</h4><p class="muted">${escapeHtml(p.email)}${p.phone_number ? ' • ' + escapeHtml(p.phone_number) : ''}</p></div>
+        <span class="status-pill ${p.is_archived ? 'danger' : 'success'}">${p.is_archived ? 'Archivé' : 'Actif'}</span></div>
+        <div class="array-list" style="margin:10px 0 12px;">${renderBadges(p.public_conditions || [])}</div>
+        <div class="split">
+          <span class="muted">Allergies: ${(p.public_allergies || []).length}</span>
+          ${p.is_archived ? `<button class="btn btn-secondary" data-restore="${p.id}">Désarchiver</button>` : `<div class="toolbar"><a class="btn btn-secondary" href="/doctor-patient.html?id=${p.id}">Ouvrir le dossier</a></div>`}
+        </div>
+      </div>`).join('') : '<div class="patient-card"><p class="muted">Aucun patient à afficher.</p></div>';
+    qsa('[data-restore]').forEach(btn => btn.addEventListener('click', async () => {
+      try { await api(`/patients/${btn.dataset.restore}/restore`, { method: 'POST' }); success(box, 'Patient désarchivé avec succès.'); await loadPatients(); }
+      catch(err){ showInlineMessage(box, err.message, 'error'); }
+    }));
+  };
+
+  async function loadPatients(){
+    try {
+      const data = await api(`/patients${isArchivedView ? '?include_archived=true' : ''}`);
+      currentItems = (data.items || []).filter(item => isArchivedView ? item.is_archived : !item.is_archived);
+      qs('#doctor-count').textContent = (data.items || []).filter(x => !x.is_archived).length;
+      qs('#critical-count').textContent = (data.items || []).filter(x => (x.public_allergies || []).length).length;
+      qs('#archived-count').textContent = (data.items || []).filter(x => x.is_archived).length;
+      qs('#doctor-section-title').textContent = isArchivedView ? 'Patients archivés' : 'Tous les patients';
+      renderDoctorItems(searchInput?.value.trim() || '');
+    } catch(err){ showInlineMessage(box, `${err.message} — validez le PIN si nécessaire.`, 'error'); }
+  }
+
+  searchInput?.addEventListener('input', () => renderDoctorItems(searchInput.value.trim()));
+
   const form = qs('#doctor-create-patient-form');
-  const box = qs('#doctor-form-message');
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -568,9 +585,18 @@ async function initDoctorForm(){
       };
       const data = await api('/patients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       form.reset();
-      success(box, `Patient créé ou lié avec succès : ${data.first_name} ${data.last_name}.`, 'Patient enregistré');
-    } catch(err){ showInlineMessage(box, `${err.message} — validez votre PIN si nécessaire.`, 'error'); }
+      hideCreate();
+      success(box, `Patient créé avec succès : ${data.first_name} ${data.last_name}.`, 'Patient enregistré');
+      await loadPatients();
+    } catch(err){ showInlineMessage(formBox, `${err.message} — validez votre PIN si nécessaire.`, 'error'); }
   });
+
+  await loadPatients();
+  if(openCreateOnLoad && !isArchivedView) showCreate();
+}
+
+async function initDoctorForm(){
+  location.href = '/doctor.html?create=1';
 }
 
 async function initDoctorPatient(){
@@ -822,6 +848,22 @@ async function initAccountSettings(){
       passwordForm.reset();
       success(passwordBox, 'Mot de passe modifié avec succès.');
     } catch(err){ showInlineMessage(passwordBox, err.message, 'error'); }
+  });
+
+  qs('#settings-logout-btn')?.addEventListener('click', logout);
+  qs('#delete-account-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const currentPassword = e.currentTarget.elements['delete_current_password'].value;
+    if(!confirm('Supprimer définitivement ce compte ? Cette action est irréversible.')) return;
+    try {
+      await api('/account/delete', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: currentPassword }),
+      });
+      clearToken(); clearUser(); clearDoctorPin();
+      showActionModal('Compte supprimé définitivement.');
+      setTimeout(() => { location.href = '/'; }, 900);
+    } catch(err){ showInlineMessage(qs('#settings-danger-message'), err.message, 'error'); }
   });
 }
 
