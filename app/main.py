@@ -48,6 +48,8 @@ from .schemas import (
     EmailCodePayload,
     LoginPayload,
     RegisterPayload,
+    ResetPasswordRequestPayload,
+    ResetPasswordConfirmPayload,
 )
 from .security import create_token, decode_token, decrypt_text, encrypt_text, hash_secret, verify_secret
 
