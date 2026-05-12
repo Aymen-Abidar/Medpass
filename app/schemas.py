@@ -18,10 +18,21 @@ class LoginPayload(BaseModel):
     email: EmailStr
     password: str
 
+class ResetPasswordRequestPayload(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordConfirmPayload(BaseModel):
+    email: EmailStr
+    verification_code: str = Field(min_length=4, max_length=8)
+    new_password: str = Field(min_length=8)
+
+
 
 class EmailCodePayload(BaseModel):
     email: EmailStr
     purpose: str = 'signup'
+    strict: bool = False
 
 
 class CompleteOnboardingPayload(BaseModel):
@@ -39,6 +50,9 @@ class AppointmentPayload(BaseModel):
     date: str
     time: Optional[str] = ''
     title: str = Field(min_length=1)
+    location: Optional[str] = ''
+    status: Optional[str] = 'Planifié'
+    notes: Optional[str] = ''
 
 
 class DossierUpdatePayload(BaseModel):

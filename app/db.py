@@ -87,6 +87,13 @@ CREATE TABLE IF NOT EXISTS email_verifications (
     expires_at TEXT NOT NULL,
     is_used INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS rate_limit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    subject_key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 POSTGRES_SCHEMA = """
@@ -161,6 +168,13 @@ CREATE TABLE IF NOT EXISTS email_verifications (
     expires_at TEXT NOT NULL,
     is_used INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS rate_limit_events (
+    id BIGSERIAL PRIMARY KEY,
+    action TEXT NOT NULL,
+    subject_key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -224,6 +238,11 @@ def _ensure_migrations(conn):
     _add_column_if_missing(conn, 'users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0')
     _add_column_if_missing(conn, 'users', 'must_complete_onboarding', 'INTEGER NOT NULL DEFAULT 0')
     _add_column_if_missing(conn, 'dossiers', 'appointments_json', "TEXT NOT NULL DEFAULT '[]'")
+    if 'rate_limit_events' not in _get_existing_tables(conn):
+        if is_postgres():
+            execute(conn, 'CREATE TABLE IF NOT EXISTS rate_limit_events (id BIGSERIAL PRIMARY KEY, action TEXT NOT NULL, subject_key TEXT NOT NULL, created_at TEXT NOT NULL)')
+        else:
+            execute(conn, 'CREATE TABLE IF NOT EXISTS rate_limit_events (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, subject_key TEXT NOT NULL, created_at TEXT NOT NULL)')
 
 
 def _get_existing_tables(conn) -> set[str]:

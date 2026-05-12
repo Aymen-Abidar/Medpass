@@ -235,7 +235,7 @@ async function initSignup(){
       const data = await api('/auth/send-email-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: payload.email, purpose: 'signup' }),
+        body: JSON.stringify({ email: payload.email, purpose: 'signup', strict: true }),
       });
       pendingSignupPayload = payload;
       let msg = 'Le code de vérification a été envoyé automatiquement à votre e-mail.';
@@ -318,6 +318,45 @@ async function initOnboarding(){
   });
 }
 
+async function initForgotPassword(){
+  mountGlobalNav('forgotPassword', null);
+  const form = qs('#forgot-password-form');
+  const box = qs('#forgot-password-result');
+  const requestBtn = qs('#request-reset-code');
+  const codeWrap = qs('#forgot-code-wrap');
+  requestBtn?.addEventListener('click', async () => {
+    try {
+      const email = form.elements['email'].value.trim();
+      if(!email){ showInlineMessage(box, 'Saisissez votre e-mail.', 'error'); return; }
+      const data = await api('/auth/request-password-reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      codeWrap?.classList.remove('hidden');
+      let msg = 'Si cet e-mail existe, un code a été envoyé.';
+      if(data.dev_code) msg += ` Code local: ${data.dev_code}`;
+      success(box, msg, 'Code envoyé');
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('/auth/reset-password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: form.elements['email'].value.trim(),
+          verification_code: form.elements['verification_code'].value.trim(),
+          new_password: form.elements['new_password'].value,
+        }),
+      });
+      form.reset();
+      codeWrap?.classList.add('hidden');
+      success(box, 'Mot de passe réinitialisé avec succès.', 'Réinitialisation terminée');
+      setTimeout(() => { location.href = '/login.html'; }, 900);
+    } catch(err){ showInlineMessage(box, err.message, 'error'); }
+  });
+}
+
 async function initClient(){
   let user = protect('patient'); if(!user) return;
   user = await refreshUser();
@@ -341,7 +380,7 @@ async function initClient(){
     try {
       const data = await api('/patient/appointments', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date: form.elements['date'].value, time: form.elements['time'].value, title: form.elements['title'].value.trim() }),
+        body: JSON.stringify({ date: form.elements['date'].value, time: form.elements['time'].value, title: form.elements['title'].value.trim(), location: form.elements['location'].value.trim(), status: form.elements['status'].value, notes: form.elements['notes'].value.trim() }),
       });
       renderAppointments(data.items || []);
       form.reset();
@@ -353,11 +392,16 @@ async function initClient(){
 function renderAppointments(items){
   const list = qs('#appointments-list');
   if(!list) return;
-  if(!items.length){ list.innerHTML = '<div class="patient-card"><p class="muted">Aucun rendez-vous enregistré.</p></div>'; return; }
+  if(!items.length){
+    list.innerHTML = '<div class="patient-card empty-state-card"><h4>Aucun rendez-vous enregistré</h4><p class="muted">Ajoutez votre prochain rendez-vous avec votre médecin pour le retrouver ici rapidement.</p></div>';
+    return;
+  }
   list.innerHTML = items.map((item, index) => `
-    <div class="patient-card">
-      <div class="split"><div><h4>${escapeHtml(item.title)}</h4><p class="muted">${escapeHtml(item.date)} ${item.time ? '• ' + escapeHtml(item.time) : ''}</p></div>
-      <button class="btn btn-secondary" data-delete-appointment="${index}">Supprimer</button></div>
+    <div class="patient-card patient-card-rich appointment-card">
+      <div class="split"><div><h4>${escapeHtml(item.title)}</h4><p class="muted">${escapeHtml(item.date)} ${item.time ? '• ' + escapeHtml(item.time) : ''}${item.location ? ' • ' + escapeHtml(item.location) : ''}</p></div>
+      <span class="status-pill ${item.status === 'Confirmé' ? 'success' : item.status === 'Reporté' ? 'danger' : ''}">${escapeHtml(item.status || 'Planifié')}</span></div>
+      ${item.notes ? `<p class="muted" style="margin:10px 0 0;">${escapeHtml(item.notes)}</p>` : ''}
+      <div class="toolbar" style="margin-top:12px;"><button class="btn btn-secondary" data-delete-appointment="${index}">Supprimer</button></div>
     </div>`).join('');
   qsa('[data-delete-appointment]').forEach(btn => btn.addEventListener('click', async () => {
     try {
@@ -873,6 +917,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const initMap = {
     login: initLogin,
     signup: initSignup,
+    forgotPassword: initForgotPassword,
     onboarding: initOnboarding,
     client: initClient,
     patientProfile: initPatientProfile,

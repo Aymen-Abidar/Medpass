@@ -414,3 +414,22 @@ body[data-page="landing"] .site-frame-full { width: 100%; max-width: none; min-h
 .menu-drawer-inner { display:grid; gap:10px; padding:14px; border-radius:22px; border:1px solid var(--stroke); background: linear-gradient(180deg, rgba(14,25,46,.98), rgba(9,18,33,.98)); box-shadow: 0 18px 50px rgba(0,0,0,.28); }
 .menu-drawer .nav-link { width:100%; }
 @media (max-width: 560px) { .nav-settings-btn { min-width: 110px; padding-left:12px; padding-right:12px; } .menu-toggle { width:50px; height:50px; } }
+
+.text-link { color: #d8efff; font-weight: 600; }
+.text-link:hover { text-decoration: underline; }
+.empty-state-card { text-align: center; display: grid; gap: 8px; min-height: 150px; place-content: center; }
+.appointment-card { display: grid; gap: 8px; }
+.appointment-stack { display: grid; gap: 14px; }
+.nav-shell .hidden { display: none !important; }
+@media (max-width: 880px) {
+  .nav-settings-btn { width: auto; min-width: 128px; }
+  .menu-drawer { width: min(320px, calc(100vw - 28px)); }
+  .dashboard-banner .toolbar { width: 100%; }
+}
+@media (max-width: 560px) {
+  .shell { padding: 10px; }
+  .phone-frame { padding: 14px; }
+  .section-title-row .toolbar, .dashboard-banner .toolbar { width: 100%; }
+  .menu-drawer { left: 0; right: auto; width: calc(100vw - 34px); }
+  .nav-settings-btn { min-width: 108px; }
+}

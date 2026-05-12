@@ -24,6 +24,14 @@ from .config import (
     SMTP_PASSWORD,
     SMTP_PORT,
     SMTP_USER,
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
+    PIN_RATE_LIMIT_WINDOW_SECONDS,
+    PIN_RATE_LIMIT_MAX_ATTEMPTS,
+    EMAIL_CODE_RATE_LIMIT_WINDOW_SECONDS,
+    EMAIL_CODE_RATE_LIMIT_MAX_ATTEMPTS,
+    PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS,
+    PASSWORD_RESET_RATE_LIMIT_MAX_ATTEMPTS,
 )
 from .db import create_default_private_data, execute, get_conn, init_db, insert_user, utcnow
 from .schemas import (
@@ -212,6 +220,23 @@ def verify_email_code(conn, email: str, code: str, purpose: str):
         raise HTTPException(status_code=400, detail='Code de vérification invalide ou expiré.')
     execute(conn, 'UPDATE email_verifications SET is_used = 1 WHERE id = ?', (row['id'],))
 
+def cleanup_rate_limit_events(conn):
+    threshold = (now_dt() - timedelta(hours=24)).isoformat()
+    execute(conn, 'DELETE FROM rate_limit_events WHERE created_at < ?', (threshold,))
+
+
+def enforce_rate_limit(conn, action: str, subject_key: str, limit: int, window_seconds: int):
+    cleanup_rate_limit_events(conn)
+    since = (now_dt() - timedelta(seconds=window_seconds)).isoformat()
+    row = execute(conn, 'SELECT COUNT(*) as c FROM rate_limit_events WHERE action = ? AND subject_key = ? AND created_at >= ?', (action, subject_key, since)).fetchone()
+    count = int(row['c']) if row else 0
+    if count >= limit:
+        raise HTTPException(status_code=429, detail='Trop de tentatives. Réessayez plus tard.')
+
+
+def register_rate_limit_event(conn, action: str, subject_key: str):
+    execute(conn, 'INSERT INTO rate_limit_events (action, subject_key, created_at) VALUES (?,?,?)', (action, subject_key, now_dt().isoformat()))
+
 
 @app.get('/health')
 def health():
@@ -224,6 +249,12 @@ def send_email_code(payload: EmailCodePayload):
     now = now_dt()
     expires = now + timedelta(minutes=EMAIL_CODE_EXPIRY_MINUTES)
     with get_conn() as conn:
+        if payload.strict:
+            existing = execute(conn, 'SELECT id FROM users WHERE email = ?', (payload.email.lower(),)).fetchone()
+            if existing:
+                raise HTTPException(status_code=400, detail='Cet e-mail existe déjà.')
+        enforce_rate_limit(conn, f'email_code:{payload.purpose}', payload.email.lower(), EMAIL_CODE_RATE_LIMIT_MAX_ATTEMPTS, EMAIL_CODE_RATE_LIMIT_WINDOW_SECONDS)
+        register_rate_limit_event(conn, f'email_code:{payload.purpose}', payload.email.lower())
         execute(conn, 'INSERT INTO email_verifications (email, code_hash, purpose, created_at, expires_at, is_used) VALUES (?,?,?,?,?,0)',
                 (payload.email.lower(), hash_secret(code), payload.purpose, now.isoformat(), expires.isoformat()))
     result = send_email_code_message(payload.email.lower(), code, payload.purpose)
@@ -279,8 +310,10 @@ def register_verified(payload: RegisterPayload):
 @app.post('/api/auth/login')
 def login(payload: LoginPayload):
     with get_conn() as conn:
+        enforce_rate_limit(conn, 'login', payload.email.lower(), LOGIN_RATE_LIMIT_MAX_ATTEMPTS, LOGIN_RATE_LIMIT_WINDOW_SECONDS)
         user = execute(conn, 'SELECT * FROM users WHERE email = ?', (payload.email.lower(),)).fetchone()
         if not user or not verify_secret(payload.password, user['password_hash']):
+            register_rate_limit_event(conn, 'login', payload.email.lower())
             raise HTTPException(status_code=401, detail='E-mail ou mot de passe incorrect.')
     token = create_token({'id': user['id'], 'role': user['role'], 'email': user['email']})
     return {'token': token, 'user': {'id': user['id'], 'role': user['role'], 'email': user['email'], 'first_name': user['first_name'], 'last_name': user['last_name'], 'must_complete_onboarding': bool(user.get('must_complete_onboarding')), 'email_verified': bool(user.get('email_verified'))}}
@@ -298,6 +331,33 @@ def complete_onboarding(payload: CompleteOnboardingPayload):
         user = execute(conn, 'SELECT * FROM users WHERE id = ?', (user['id'],)).fetchone()
     token = create_token({'id': user['id'], 'role': user['role'], 'email': user['email']})
     return {'token': token, 'user': {'id': user['id'], 'role': user['role'], 'email': user['email'], 'first_name': user['first_name'], 'last_name': user['last_name'], 'must_complete_onboarding': False}}
+
+
+@app.post('/api/auth/request-password-reset')
+def request_password_reset(payload: ResetPasswordRequestPayload):
+    code = ''.join(secrets.choice('0123456789') for _ in range(6))
+    now = now_dt()
+    expires = now + timedelta(minutes=EMAIL_CODE_EXPIRY_MINUTES)
+    with get_conn() as conn:
+        enforce_rate_limit(conn, 'password_reset', payload.email.lower(), PASSWORD_RESET_RATE_LIMIT_MAX_ATTEMPTS, PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS)
+        user = execute(conn, 'SELECT id FROM users WHERE email = ?', (payload.email.lower(),)).fetchone()
+        register_rate_limit_event(conn, 'password_reset', payload.email.lower())
+        if user:
+            execute(conn, 'INSERT INTO email_verifications (email, code_hash, purpose, created_at, expires_at, is_used) VALUES (?,?,?,?,?,0)',
+                    (payload.email.lower(), hash_secret(code), 'reset_password', now.isoformat(), expires.isoformat()))
+    result = send_email_code_message(payload.email.lower(), code, 'reset_password') if user else {'sent': True}
+    return {'ok': True, **result}
+
+
+@app.post('/api/auth/reset-password')
+def reset_password(payload: ResetPasswordConfirmPayload):
+    with get_conn() as conn:
+        user = execute(conn, 'SELECT * FROM users WHERE email = ?', (payload.email.lower(),)).fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail='Compte introuvable.')
+        verify_email_code(conn, payload.email.lower(), payload.verification_code, 'reset_password')
+        execute(conn, 'UPDATE users SET password_hash = ?, must_complete_onboarding = 0, email_verified = 1 WHERE id = ?', (hash_secret(payload.new_password), user['id']))
+    return {'ok': True}
 
 
 @app.get('/api/auth/me')
@@ -361,6 +421,7 @@ def request_email_change(payload: ChangeEmailRequestPayload, user=Depends(get_cu
         existing = execute(conn, 'SELECT id FROM users WHERE email = ?', (new_email,)).fetchone()
         if existing:
             raise HTTPException(status_code=400, detail='Cet e-mail est déjà utilisé.')
+        register_rate_limit_event(conn, 'email_change', user['email'].lower())
         execute(conn, 'INSERT INTO email_verifications (email, code_hash, purpose, created_at, expires_at, is_used) VALUES (?,?,?,?,?,0)',
                 (new_email, hash_secret(code), purpose, now.isoformat(), expires.isoformat()))
     result = send_email_code_message(new_email, code, 'change_email')
@@ -372,6 +433,7 @@ def confirm_email_change(payload: ChangeEmailConfirmPayload, user=Depends(get_cu
     new_email = payload.new_email.lower().strip()
     purpose = f'change_email:{user["id"]}'
     with get_conn() as conn:
+        enforce_rate_limit(conn, 'email_change', user['email'].lower(), EMAIL_CODE_RATE_LIMIT_MAX_ATTEMPTS, EMAIL_CODE_RATE_LIMIT_WINDOW_SECONDS)
         existing = execute(conn, 'SELECT id FROM users WHERE email = ?', (new_email,)).fetchone()
         if existing:
             raise HTTPException(status_code=400, detail='Cet e-mail est déjà utilisé.')
@@ -412,7 +474,14 @@ def delete_account(payload: DeleteAccountPayload, user=Depends(get_current_user)
 
 @app.post('/api/doctor/verify-pin')
 def verify_doctor_pin(payload: DoctorPinPayload, user=Depends(require_role('doctor'))):
-    require_doctor_pin(user, payload.pin)
+    with get_conn() as conn:
+        enforce_rate_limit(conn, 'doctor_pin', str(user['id']), PIN_RATE_LIMIT_MAX_ATTEMPTS, PIN_RATE_LIMIT_WINDOW_SECONDS)
+    try:
+        require_doctor_pin(user, payload.pin)
+    except HTTPException:
+        with get_conn() as conn:
+            register_rate_limit_event(conn, 'doctor_pin', str(user['id']))
+        raise
     return {'ok': True, 'valid_for_minutes': DOCTOR_PIN_RECHECK_MINUTES}
 
 
@@ -468,7 +537,7 @@ def add_appointment(payload: AppointmentPayload, user=Depends(require_role('pati
         if not dossier:
             raise HTTPException(status_code=404, detail='Dossier introuvable.')
         items = json_loads_safe(dossier.get('appointments_json'), [])
-        items.append({'date': payload.date, 'time': payload.time or '', 'title': payload.title})
+        items.append({'date': payload.date, 'time': payload.time or '', 'title': payload.title, 'location': payload.location or '', 'status': payload.status or 'Planifié', 'notes': payload.notes or ''})
         items.sort(key=lambda x: f"{x.get('date','')} {x.get('time','')}")
         execute(conn, 'UPDATE dossiers SET appointments_json = ?, updated_at = ? WHERE patient_id = ?',
                 (json.dumps(items, ensure_ascii=False), utcnow(), user['id']))
